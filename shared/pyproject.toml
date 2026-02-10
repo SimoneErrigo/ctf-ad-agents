@@ -1,0 +1,16 @@
+[project]
+name = "ctf-ad-shared"
+version = "0.1.0"
+description = "Shared utilities for CTF A&D agent system"
+requires-python = ">=3.11"
+dependencies = [
+    "semantic-kernel>=1.15.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "redis>=5.0.0",
+    "pydantic>=2.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
