@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MacOs
+
+.DS_Store
+.AppleDouble
+.LSOverride
