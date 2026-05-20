@@ -58,6 +58,7 @@ def _assert_env() -> None:
 
 def _build_llm() -> ChatBedrockConverse:
     return ChatBedrockConverse(
+        name="traffic-agent",
         model=os.environ["TRAFFIC_AGENT_MODEL"],
         region_name=os.environ["REGION_NAME"],
         aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],

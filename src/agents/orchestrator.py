@@ -20,6 +20,7 @@ class ClassificationResult(BaseModel):
 def build_orchestrator_llm() -> ChatBedrockConverse:
     """LLM powering the orchestrator (classification + multi-source synthesis)."""
     return ChatBedrockConverse(
+        name="orchestrator-llm",
         model=os.environ["ROUTER_AGENT_MODEL"],
         region_name=os.environ["REGION_NAME"],
         aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],

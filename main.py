@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 from dotenv import load_dotenv
-
+from src.graph import build_chat_app
 
 DEFAULT_QUERY = "Are there any attacks visible in the captured traffic so far?"
 
 
 async def amain(query: str) -> None:
-    from src.graph import build_app
 
-    app = await build_app()
-    final_state = await app.ainvoke({"query": query})
+    thread_id = os.environ.get("THREAD_ID", "cli-session")
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async with build_chat_app() as agent:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": query}]},
+            config,
+        )
     print("\n=== FINAL ANSWER ===\n")
-    print(final_state.get("final_answer", "<no answer>"))
+    print(result["messages"][-1].content)
 
 
 def main() -> None:
