@@ -13,7 +13,9 @@ CONVERSATIONAL_SYSTEM_PROMPT = (
     "the user asks about attacks, exploits, suspicious activity, or the state "
     "of a specific service. The conversation is persistent: rely on earlier "
     "turns for context and only re-run the tool when new analysis is needed."
-)
+) # TODO: Refine the prompt because sometimes is better to enforce that he should see first in the db
+  # before calling again the tools, this should be done keeping in mind that a flag lasts at least 5 rounds
+  # (depends on the competition), but we can save different time and tokens if we enforce it
 
 
 def build_conversational_llm() -> ChatBedrockConverse:
