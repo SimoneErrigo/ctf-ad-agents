@@ -30,23 +30,42 @@ from starlette.routing import Mount, Route
 
 from janus_mcp.client import JanusClient
 from janus_mcp.config import get_settings
-from janus_mcp.tools import register_traffic_tools
+from janus_mcp.tools import register_defender_tools, register_traffic_tools
 
 
 # Agent name -> tag set the view exposes. Add a row per new agent.
+#
+# Read-only traffic tools are tagged with both "traffic" and "defender" inside
+# tools/traffic.py — the defender agent needs to look at packets to write rules
+# (validate_filter, list_packets, get_flow…), it does NOT need a private copy.
 AGENT_VIEWS: dict[str, set[str]] = {
     "traffic": {"traffic"},
-    # "defender": {"defender", "shared"},
+    "defender": {"defender"},
     # "exploit":  {"exploit",  "shared"},
 }
 
 
-INSTRUCTIONS = (
+INSTRUCTIONS_TRAFFIC = (
     "Tools to extract traffic captured by Janus (the team's reverse proxy / sniffer). "
     "Use `list_services` first to discover service IDs. Use `list_packets` with the "
     "`q` filter DSL for queries (see Janus FILTERS.md); call `get_packet` for full "
     "detail and `get_flow` to reconstruct a full request/response chain."
 )
+
+INSTRUCTIONS_DEFENDER = (
+    "Tools to inspect Janus traffic AND to manage drop/alert rules. Read-only "
+    "packet tools (list_services, list_packets, get_packet, get_flow, "
+    "validate_filter, get_filter_dsl, get_capture_status) are available so you "
+    "can confirm a candidate rule expression matches the right traffic with "
+    "`list_packets(q=...)` before calling create_rule. Use action=\"alert\" for "
+    "anything you are not 100% sure about; promotion to \"drop\" should go "
+    "through the operator (human-in-the-loop)."
+)
+
+_AGENT_INSTRUCTIONS = {
+    "traffic": INSTRUCTIONS_TRAFFIC,
+    "defender": INSTRUCTIONS_DEFENDER,
+}
 
 
 def _build_view(agent: str, include_tags: set[str], client: JanusClient) -> FastMCP:
@@ -56,8 +75,12 @@ def _build_view(agent: str, include_tags: set[str], client: JanusClient) -> Fast
     is to register every tool and then call `view.enable(tags=..., only=True)`,
     which keeps only the matching ones and disables all the rest.
     """
-    view = FastMCP(name=f"janus-{agent}", instructions=INSTRUCTIONS)
+    view = FastMCP(
+        name=f"janus-{agent}",
+        instructions=_AGENT_INSTRUCTIONS.get(agent, INSTRUCTIONS_TRAFFIC),
+    )
     register_traffic_tools(view, client)
+    register_defender_tools(view, client)
     view.enable(tags=include_tags, only=True)
     return view
 
@@ -117,11 +140,11 @@ def main() -> None:
     app, _client = build_app()
     logging.info(
         "Janus MCP listening on http://%s:%s — endpoints: %s",
-        settings.mcp_host,
-        settings.mcp_port,
+        settings.janus_mcp_host,
+        settings.janus_mcp_port,
         [f"/{a}/mcp" for a in AGENT_VIEWS],
     )
-    uvicorn.run(app, host=settings.mcp_host, port=settings.mcp_port)
+    uvicorn.run(app, host=settings.janus_mcp_host, port=settings.janus_mcp_port)
 
 
 if __name__ == "__main__":

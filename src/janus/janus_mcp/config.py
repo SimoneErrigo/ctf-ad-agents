@@ -18,9 +18,8 @@ class Settings(BaseSettings):
     janus_display_name: str = Field("mcp-agent", description="Login display name.")
     janus_timeout: float = Field(20.0, description="HTTP request timeout (seconds).")
 
-    mcp_host: str = Field("0.0.0.0", description="Bind address for MCP transport.")
-    mcp_port: int = Field(8765, description="Port for MCP transport.")
-    mcp_path: str = Field("/mcp", description="HTTP path the MCP server is served on.")
+    janus_mcp_host: str = Field("0.0.0.0", description="Bind address for MCP transport.")
+    janus_mcp_port: int = Field(8765, description="Port for MCP transport.")
 
     janus_max_limit: int = Field(1000, description="Hard cap on list_packets `limit`.")
     janus_summary_max_limit: int = Field(
@@ -30,7 +29,8 @@ class Settings(BaseSettings):
     janus_body_max_bytes: int = Field(8192, description="Max body bytes per packet (0 = unlimited).")
     janus_max_flow_packets: int = Field(20, description="Max packets in a flow.")
 
-
+# Cache the settings instance so it's only created once per process. 
+# we don't want to do it on every tool call.
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

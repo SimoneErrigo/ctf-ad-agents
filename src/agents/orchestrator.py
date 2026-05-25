@@ -29,24 +29,69 @@ def build_orchestrator_llm() -> ChatBedrockConverse:
     )
 
 
-CLASSIFY_PROMPT = """Analyze this query and determine which agent to consult.
+CLASSIFY_PROMPT = """Analyze this query and determine which agent(s) to consult.
 For each relevant agent, generate a targeted sub-question optimized for that agent.
 
 Available agents:
-- traffic: Analyzes network traffic and identifies potential threats based on patterns in the data.
+- traffic: Analyzes network traffic captured by Janus and, when explicitly
+  asked, can write Janus alert/drop rules. Use for: "are we under attack?",
+  "what is hitting service X?", "show me the exploit", "create an alert rule
+  for that pattern", "block this request". Drop rules require operator
+  approval (HITL).
+- patch: Reads service source code and produces a minimal source-level patch,
+  then deploys it to the competition VM via git. Use for: "patch this bug",
+  "fix the vulnerability in service X", "deploy a fix that blocks this
+  attack at the code level", "rollback the last patch". Every deploy /
+  rollback requires operator approval (HITL).
 
-Return ONLY the sources that are relevant to the query. Each source should have
-a targeted sub-question optimized for that specific knowledge domain.
+Routing rules:
+- Pick the SMALLEST set of agents that can answer. Most queries are single-agent.
+- Send to BOTH when the user explicitly asks for traffic analysis AND a patch
+  (e.g. "find the attack and patch it") OR asks for a live Janus rule AND a
+  source patch in the same request (e.g. "find SQLi, make a drop rule, then
+  patch it"). In that case the traffic sub-question must BOTH produce concrete
+  evidence (service/endpoint/parameter/payload) and, when the user asked for a
+  rule, create or update the requested Janus rule through the HITL tool.
+- Do NOT route a pure "explain / summarize" question to the patch agent.
+- Do NOT satisfy "make/create/update a drop rule" by merely reporting a rule
+  from conversation memory. The traffic agent must verify current Janus rules
+  in this run, and must call create_rule/update_rule if the requested live rule
+  is absent or stale.
 
-The traffic agent is time-constrained, so the sub-question MUST scope the work:
+Return ONLY the sources that are relevant. Each source should have a targeted
+sub-question optimized for that specific domain.
+
+The traffic agent is time-constrained, so its sub-question MUST scope the work:
 name the specific service if given, ask only about RECENT traffic, steer toward
 flagged / flag-id-bearing requests, and tell it to stop as soon as the attack(s)
 are identified with evidence. Keep it to one or two sentences.
 
-Example for "Are there any attacks in the RCEaas service?":
-- traffic: "Which attacks target the RCEaas service? Inspect only recent RCEaas
-  traffic, prioritising flagged or flag-id-bearing requests; identify the attack
-  pattern with evidence and stop as soon as it is confirmed."
+The patch agent's sub-question MUST name the target service and, when
+available, the attack technique or vulnerable code path the operator (or the
+traffic agent) already identified. Tell it to propose a minimal patch and to
+go through the HITL gate before deploying.
+
+Examples:
+- User: "Are there any attacks in the RCEaas service?"
+  - traffic: "Which attacks target the RCEaas service? Inspect only recent
+    RCEaas traffic, prioritising flagged or flag-id-bearing requests; identify
+    the attack pattern with evidence and stop as soon as it is confirmed."
+- User: "Patch the path-traversal bug in ccforms."
+  - patch: "Patch the path-traversal vulnerability in service 'ccforms'.
+    Locate the unsafe filename handling, propose a minimal fix that rejects
+    '..' and absolute paths, then propose deploy via HITL."
+- User: "Find the SQLi on web1 and fix it."
+  - traffic: "Identify the SQLi pattern hitting service 'web1' from recent
+    traffic; report the offending endpoint, parameter, and a sample payload."
+  - patch: "Patch the SQLi in service 'web1'. Use the endpoint/parameter the
+    traffic agent will report; prefer query parameterization; propose deploy
+    via HITL."
+- User: "Find SQLi, make a drop rule, and patch it."
+  - traffic: "Identify the recent SQLi pattern, verify current Janus rules, and
+    create a tight drop rule for the payload through HITL if one is not already
+    active. Report service id, expression, and rule id."
+  - patch: "Patch the SQLi in the affected service using the endpoint/parameter
+    reported by traffic; propose deploy via HITL."
 """
 
 

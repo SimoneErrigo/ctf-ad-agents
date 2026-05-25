@@ -74,7 +74,7 @@ class JanusClient:
             raise JanusError(r.status_code, r.text.strip() or r.reason_phrase)
         return r
 
-
+    # Traffic tools
 
     async def list_services(self) -> list[dict[str, Any]]:
         r = await self._request("GET", "/api/services")
@@ -98,4 +98,40 @@ class JanusClient:
 
     async def get_capture_status(self) -> dict[str, Any]:
         r = await self._request("GET", "/api/traffic/capture")
+        return r.json()
+
+    # Rules and alerts
+
+    async def list_rules(self, service_id: str | None = None) -> list[dict[str, Any]]:
+        r = await self._request("GET", "/api/rules", params={"service_id": service_id})
+        # Janus serializes a nil slice as JSON `null`. Normalize to [] so MCP
+        # consumers see a valid array (their schema rejects `null`).
+        data = r.json()
+        return data if isinstance(data, list) else []
+
+    async def get_rule(self, rule_id: str) -> dict[str, Any]:
+        r = await self._request("GET", f"/api/rules/{rule_id}")
+        return r.json()
+
+    async def create_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+        r = await self._request("POST", "/api/rules", json=rule)
+        return r.json()
+
+    async def update_rule(self, rule_id: str, rule: dict[str, Any]) -> dict[str, Any]:
+        r = await self._request("PUT", f"/api/rules/{rule_id}", json=rule)
+        return r.json()
+
+    async def delete_rule(self, rule_id: str) -> None:
+        await self._request("DELETE", f"/api/rules/{rule_id}")
+
+
+    async def list_alerts(self, params: dict[str, Any]) -> dict[str, Any]:
+        r = await self._request("GET", "/api/alerts", params=params)
+        data = r.json()
+        if isinstance(data, dict) and data.get("alerts") is None:
+            data["alerts"] = []
+        return data
+
+    async def get_alert(self, alert_id: int) -> dict[str, Any]:
+        r = await self._request("GET", f"/api/alerts/{alert_id}")
         return r.json()
