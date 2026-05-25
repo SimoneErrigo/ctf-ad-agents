@@ -8,7 +8,7 @@ services:
     ports:
       # exposed on localhost for local development. Agents running in the
       # same Docker network can reach the MCP at http://janus-mcp:8765/mcp.
-      - "127.0.0.1:${MCP_PORT:-8765}:${MCP_PORT:-8765}"
+      - "127.0.0.1:${JANUS_MCP_PORT:-8765}:${JANUS_MCP_PORT:-8765}"
     networks:
       - janus-net
     restart: unless-stopped

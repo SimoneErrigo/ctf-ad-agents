@@ -51,8 +51,7 @@ All settings come from environment variables (see `.env.example`):
 | `JANUS_URL`             | `http://janus:8080` | Container-network URL. Override for host-network setups.     |
 | `JANUS_PASSWORD`        | —                   | **Required.** Equal to Janus' `TEAM_PASSWORD`.               |
 | `JANUS_DISPLAY_NAME`    | `mcp-agent`         | Login name shown in the Janus sidebar.                       |
-| `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8765`  | Bind for the streamable-HTTP transport.                      |
-| `MCP_PATH`              | `/mcp`              | HTTP path the MCP is served on.                              |
+| `JANUS_MCP_HOST` / `JANUS_MCP_PORT` | `0.0.0.0` / `8765` | Bind for the streamable-HTTP transport. Endpoints are at `/<agent>/mcp`. |
 | `JANUS_MAX_LIMIT`       | `1000`              | Hard cap on `list_packets` `limit` (protects context).       |
 | `JANUS_SUMMARY_MAX_LIMIT` | `50`              | Hard cap for summary-mode `list_packets` rows sent to agents. |
 | `JANUS_BODY_MAX_BYTES`  | `8192`              | Truncate per-packet body; `0` = unlimited.                   |

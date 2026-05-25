@@ -125,7 +125,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return FILTERS_FULL
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def list_services() -> list[dict[str, Any]]:
@@ -133,7 +133,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return await client.list_services()
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def get_filter_dsl() -> str:
@@ -145,7 +145,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return FILTER_CHEATSHEET
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def validate_filter(expression: str) -> dict[str, Any]:
@@ -157,7 +157,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return await client.validate_filter(expression)
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def list_packets(
@@ -214,7 +214,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return result
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def get_packet(
@@ -227,7 +227,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return _trim_body(pkt, s.janus_body_max_bytes)
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def get_flow(
@@ -270,7 +270,7 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         return flow
 
     @mcp.tool(
-        tags={"traffic"},
+        tags={"traffic", "defender"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": True},
     )
     async def get_capture_status() -> dict[str, Any]:

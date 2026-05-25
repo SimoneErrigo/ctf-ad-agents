@@ -3,7 +3,7 @@ To add a new agent:
     1. Tag the relevant tools on the MCP server (e.g. `tags={"defender"}`).
     2. Add a row in the server's AGENT_VIEWS so a /defender/mcp endpoint is
         mounted.
-    3. Add an entry to AGENT_MCP_URLS below (env var or hard-coded default).
+    3. Add an entry to AGENT_MCP_URLS below.
 """
 
 from __future__ import annotations
@@ -16,18 +16,24 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 log = logging.getLogger(__name__)
 
+# Each server is configured by a single <SERVICE>_MCP_BASE_URL (host:port, no
+# path); the per-endpoint path is appended below.
+JANUS_MCP_BASE_URL: str = os.getenv("JANUS_MCP_BASE_URL", "http://localhost:8765").rstrip("/")
+PATCHER_MCP_BASE_URL: str = os.getenv("PATCHER_MCP_BASE_URL", "http://localhost:8766").rstrip("/")
 
-def _default_url(agent: str) -> str:
-    base = os.getenv("JANUS_MCP_BASE_URL", "http://localhost:8765").rstrip("/")
-    return f"{base}/{agent}/mcp"
-
-
-# agent name -> Streamable-HTTP URL of its dedicated MCP endpoint.
-# Per-agent overrides via env vars: JANUS_TRAFFIC_MCP_URL, JANUS_DEFENDER_MCP_URL, ...
+# agent name -> Streamable-HTTP URL of its dedicated Janus MCP endpoint.
+# The traffic sub-agent needs BOTH read-only packet tools AND the rule CRUD
+# surface, so it consumes the `defender` view, a superset of `traffic` via
+# dual-tagging in janus-mcp/tools/traffic.py. The bare `traffic` view is left
+# registered for future read-only consumers.
 AGENT_MCP_URLS: dict[str, str] = {
-    "traffic": os.getenv("JANUS_TRAFFIC_MCP_URL", _default_url("traffic")),
-    # "defender": os.getenv("JANUS_DEFENDER_MCP_URL", _default_url("defender")),
+    "traffic": f"{JANUS_MCP_BASE_URL}/traffic/mcp",
+    "defender": f"{JANUS_MCP_BASE_URL}/defender/mcp",
 }
+
+# Patcher MCP is a separate FastMCP server (src/patcher/) with a single endpoint
+# (no per-agent views); only the patch agent consumes it.
+PATCHER_MCP_URL: str = f"{PATCHER_MCP_BASE_URL}/mcp"
 
 
 class MCPToolRegistry:
@@ -80,3 +86,25 @@ async def build_registry() -> MCPToolRegistry:
             [t.name for t in tools],
         )
     return MCPToolRegistry(by_agent)
+
+
+async def build_patcher_registry() -> MCPToolRegistry:
+    """Connect to the patcher MCP endpoint and load its tools.
+
+    The patcher is a separate FastMCP server (src/patcher/) with a single
+    endpoint and no per-agent views, so it gets its own one-entry registry
+    instead of sharing AGENT_MCP_URLS with the janus-mcp views. Reusing
+    MCPToolRegistry keeps the patch agent's loader structure identical to the
+    janus agents (see traffic_agent_tools / patch_agent_tools).
+    """
+    client = MultiServerMCPClient({
+        "patcher": {"url": PATCHER_MCP_URL, "transport": "streamable_http"},
+    })
+    tools = await client.get_tools()
+    log.info(
+        "MCP[patcher] loaded %d tools from %s: %s",
+        len(tools),
+        PATCHER_MCP_URL,
+        [t.name for t in tools],
+    )
+    return MCPToolRegistry({"patcher": tools})

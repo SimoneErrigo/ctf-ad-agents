@@ -1,0 +1,22 @@
+[project]
+name = "patcher-mcp"
+version = "0.1.0"
+description = "MCP server that lets the patch agent read service source code, propose patches as git commits, and deploy them to the competition VM via ssh-backed git push."
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "Simone Errigo", email = "simone.errigo@mail.polimi.it" }]
+
+dependencies = [
+    "fastmcp>=2.3.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["patcher_mcp"]

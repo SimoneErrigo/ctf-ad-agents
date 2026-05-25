@@ -1,0 +1,24 @@
+services:
+  patcher-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: patcher-mcp
+    env_file: .env
+    ports:
+      # Exposed on localhost for local development. Agents on the same Docker
+      # network can reach it at http://patcher-mcp:8766/mcp.
+      - "127.0.0.1:${PATCHER_MCP_PORT:-8766}:${PATCHER_MCP_PORT:-8766}"
+    volumes:
+      # Workspace persistence: every service repo lives under this path,
+      # one subdirectory per service. Survives container restarts.
+      - patcher-workspace:/var/lib/patcher/workspace
+      # SSH private key used to push to the competition VM. Mount your local
+      # key read-only and let the container use it for `git push`.
+      # Set PATCHER_SSH_KEY_HOST on the host to the absolute path of the key
+      # (e.g. ~/.ssh/ctf_deploy). Permissions must be 600 on the host.
+      - "${PATCHER_SSH_KEY_HOST:-./id_ed25519}:/root/.ssh/id_ed25519:ro"
+    restart: unless-stopped
+
+volumes:
+  patcher-workspace:
