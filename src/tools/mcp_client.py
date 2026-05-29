@@ -20,20 +20,28 @@ log = logging.getLogger(__name__)
 # path); the per-endpoint path is appended below.
 JANUS_MCP_BASE_URL: str = os.getenv("JANUS_MCP_BASE_URL", "http://localhost:8765").rstrip("/")
 PATCHER_MCP_BASE_URL: str = os.getenv("PATCHER_MCP_BASE_URL", "http://localhost:8766").rstrip("/")
+EXPLOITER_MCP_BASE_URL: str = os.getenv("EXPLOITER_MCP_BASE_URL", "http://localhost:8767").rstrip("/")
 
 # agent name -> Streamable-HTTP URL of its dedicated Janus MCP endpoint.
 # The traffic sub-agent needs BOTH read-only packet tools AND the rule CRUD
 # surface, so it consumes the `defender` view, a superset of `traffic` via
-# dual-tagging in janus-mcp/tools/traffic.py. The bare `traffic` view is left
-# registered for future read-only consumers.
+# dual-tagging in janus-mcp/tools/traffic.py. The `exploit` view is read-only
+# packet tools (no rule CRUD), consumed by the exploit agent.
 AGENT_MCP_URLS: dict[str, str] = {
     "traffic": f"{JANUS_MCP_BASE_URL}/traffic/mcp",
     "defender": f"{JANUS_MCP_BASE_URL}/defender/mcp",
+    "exploit": f"{JANUS_MCP_BASE_URL}/exploit/mcp",
 }
 
-# Patcher MCP is a separate FastMCP server (src/patcher/) with a single endpoint
-# (no per-agent views); only the patch agent consumes it.
+# Patcher MCP is a separate FastMCP server (src/patcher/). The full `patch` view
+# is at /mcp (patch agent); a read-only `read` view is at /read/mcp (exploit
+# agent, to read service source without write/deploy).
 PATCHER_MCP_URL: str = f"{PATCHER_MCP_BASE_URL}/mcp"
+PATCHER_MCP_READ_URL: str = f"{PATCHER_MCP_BASE_URL}/read/mcp"
+
+# Exploiter MCP is a separate FastMCP server (src/exploiter/) with a single
+# endpoint; only the exploit agent consumes it.
+EXPLOITER_MCP_URL: str = f"{EXPLOITER_MCP_BASE_URL}/mcp"
 
 
 class MCPToolRegistry:
@@ -108,3 +116,21 @@ async def build_patcher_registry() -> MCPToolRegistry:
         [t.name for t in tools],
     )
     return MCPToolRegistry({"patcher": tools})
+
+
+async def _load_single(agent: str, url: str) -> MCPToolRegistry:
+    """Load one MCP endpoint into a one-entry registry keyed by `agent`."""
+    client = MultiServerMCPClient({agent: {"url": url, "transport": "streamable_http"}})
+    tools = await client.get_tools()
+    log.info("MCP[%s] loaded %d tools from %s: %s", agent, len(tools), url, [t.name for t in tools])
+    return MCPToolRegistry({agent: tools})
+
+
+async def build_exploiter_registry() -> MCPToolRegistry:
+    """Load the exploiter MCP endpoint (xfarm authoring + farm recon)."""
+    return await _load_single("exploiter", EXPLOITER_MCP_URL)
+
+
+async def build_patcher_read_registry() -> MCPToolRegistry:
+    """Load the patcher read-only view (source reading, no write/deploy)."""
+    return await _load_single("patcher_read", PATCHER_MCP_READ_URL)

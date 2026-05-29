@@ -109,7 +109,7 @@ def wrap_rule_update(mcp_tool: BaseTool) -> BaseTool:
     """Require operator approval for update_rule when the new action is drop or both.
 
     We always require approval for updates that result in a drop, even if the
-    rule was previously a drop — the operator should re-confirm any change to
+    rule was previously a drop, the operator should re-confirm any change to
     live blocking behavior.
     """
 
@@ -141,7 +141,7 @@ def wrap_patch_deploy(mcp_tool: BaseTool) -> BaseTool:
 
     def _summary(kw: dict[str, Any]) -> str:
         return (
-            f"Deploy patch for service '{kw.get('service')}' — branch "
+            f"Deploy patch for service '{kw.get('service')}', branch "
             f"{kw.get('branch', 'main')!r}, message: {kw.get('message')!r}"
         )
 
@@ -150,7 +150,7 @@ def wrap_patch_deploy(mcp_tool: BaseTool) -> BaseTool:
         type="approve_patch_deploy",
         description_suffix=(
             "HITL: deploying a patch pushes code to the competition VM and "
-            "triggers a service rebuild — always paused for operator approval."
+            "triggers a service rebuild, always paused for operator approval."
         ),
         should_control=lambda _kw: True,
         summary=_summary,
@@ -158,7 +158,7 @@ def wrap_patch_deploy(mcp_tool: BaseTool) -> BaseTool:
 
 
 def wrap_patch_rollback(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval for rollback — same reasoning as deploy."""
+    """Require operator approval for rollback, same reasoning as deploy."""
 
     def _summary(kw: dict[str, Any]) -> str:
         return (
@@ -170,8 +170,45 @@ def wrap_patch_rollback(mcp_tool: BaseTool) -> BaseTool:
         mcp_tool,
         type="approve_patch_rollback",
         description_suffix=(
-            "HITL: a rollback rewinds the deployed code on the VM — always "
+            "HITL: a rollback rewinds the deployed code on the VM, always "
             "paused for operator approval."
+        ),
+        should_control=lambda _kw: True,
+        summary=_summary,
+    )
+
+
+def wrap_exploit_start(mcp_tool: BaseTool) -> BaseTool:
+    """Require operator approval before launching an exploit against all teams."""
+
+    def _summary(kw: dict[str, Any]) -> str:
+        return f"Launch exploit '{kw.get('name')}' against ALL teams (real attack)"
+
+    return _wrap_with_hitl(
+        mcp_tool,
+        type="approve_exploit_start",
+        description_suffix=(
+            "HITL: starting an exploit attacks every team's service and submits "
+            "flags, always paused for operator approval. Use test_exploit "
+            "(NOP team) first; it is NOT gated."
+        ),
+        should_control=lambda _kw: True,
+        summary=_summary,
+    )
+
+
+def wrap_exploit_push(mcp_tool: BaseTool) -> BaseTool:
+    """Require operator approval before uploading exploit source to the farm."""
+
+    def _summary(kw: dict[str, Any]) -> str:
+        return f"Push exploit '{kw.get('name')}' source to the farm, message: {kw.get('message')!r}"
+
+    return _wrap_with_hitl(
+        mcp_tool,
+        type="approve_exploit_push",
+        description_suffix=(
+            "HITL: pushing uploads the exploit source to the shared farm where "
+            "workers pick it up, paused for operator approval."
         ),
         should_control=lambda _kw: True,
         summary=_summary,
@@ -183,6 +220,8 @@ _DEFAULT_WRAPPERS: dict[str, callable] = {
     "update_rule": wrap_rule_update,
     "deploy": wrap_patch_deploy,
     "rollback": wrap_patch_rollback,
+    "start_exploit": wrap_exploit_start,
+    "push_exploit": wrap_exploit_push,
 }
 
 

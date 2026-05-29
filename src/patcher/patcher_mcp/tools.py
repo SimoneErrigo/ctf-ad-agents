@@ -26,7 +26,7 @@ def register_tools(mcp: FastMCP) -> None:
     # Discovery
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def list_workspace_services() -> list[str]:
@@ -38,7 +38,7 @@ def register_tools(mcp: FastMCP) -> None:
         return git_functions.list_workspace_services()
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def resolve_service(
@@ -54,7 +54,7 @@ def register_tools(mcp: FastMCP) -> None:
             return _as_error(e)
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )
     async def ensure_service_repo(
@@ -72,7 +72,7 @@ def register_tools(mcp: FastMCP) -> None:
     # Read
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def list_files(
@@ -89,7 +89,7 @@ def register_tools(mcp: FastMCP) -> None:
             return _as_error(e)
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def read_file(
@@ -104,7 +104,7 @@ def register_tools(mcp: FastMCP) -> None:
             return _as_error(e)
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def git_status(
@@ -117,7 +117,7 @@ def register_tools(mcp: FastMCP) -> None:
             return _as_error(e)
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def git_log(
@@ -131,7 +131,7 @@ def register_tools(mcp: FastMCP) -> None:
             return _as_error(e)
 
     @mcp.tool(
-        tags={"patch"},
+        tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
     async def get_diff(
