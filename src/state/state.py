@@ -15,7 +15,7 @@ class AgentOutput(TypedDict):
 
 class Classification(TypedDict):
     """A single routing decision: which agent to call with what query."""
-    source: Literal["traffic", "patch"]
+    source: Literal["traffic", "patch", "exploit"]
     query: str
 
 

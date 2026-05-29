@@ -13,11 +13,17 @@ from src.agents.orchestrator import (
     make_synthesize_node,
     route_to_agents,
 )
+from src.agents.exploit_agent import build_exploit_agent
 from src.agents.patch_agent import build_patch_agent
 from src.agents.traffic_agent import build_traffic_agent
 from src.persistence import postgres_checkpointer
 from src.state.state import AgentInput, RouterState
-from src.tools.mcp_client import build_patcher_registry, build_registry
+from src.tools.mcp_client import (
+    build_exploiter_registry,
+    build_patcher_read_registry,
+    build_patcher_registry,
+    build_registry,
+)
 
 
 def make_traffic_node(traffic_agent):
@@ -58,6 +64,28 @@ def make_patch_node(patch_agent):
     return query_patch_agent
 
 
+def make_exploit_node(exploit_agent):
+    """Build the ``exploit`` node: adapt the exploit sub-agent to graph state.
+
+    Like patch, this subgraph is stateless; HITL (push/start approvals) raised
+    by the exploit agent's tools propagates up to the conversational layer's
+    checkpointer, which is what pauses the run.
+    """
+
+    async def query_exploit_agent(state: AgentInput) -> dict:
+        result = await exploit_agent.ainvoke(
+            {"messages": [{"role": "user", "content": state["query"]}]},
+            {"recursion_limit": 50},
+        )
+        return {
+            "results": [
+                {"source": "exploit", "result": result["messages"][-1].content}
+            ]
+        }
+
+    return query_exploit_agent
+
+
 async def build_app():
     """Build the compiled LangGraph app. Call once at startup."""
     orchestrator_llm = build_orchestrator_llm()
@@ -65,19 +93,28 @@ async def build_app():
 
     registry = await build_registry()
     patcher_registry = await build_patcher_registry()
+    exploiter_registry = await build_exploiter_registry()
+    patcher_read_registry = await build_patcher_read_registry()
     traffic_agent = await build_traffic_agent(registry)
     patch_agent = await build_patch_agent(patcher_registry)
+    exploit_agent = await build_exploit_agent(
+        registry, exploiter_registry, patcher_read_registry
+    )
 
     workflow = StateGraph(RouterState)
     workflow.add_node("classify", make_classify_node(structured_llm))
     workflow.add_node("traffic", make_traffic_node(traffic_agent))
     workflow.add_node("patch", make_patch_node(patch_agent))
+    workflow.add_node("exploit", make_exploit_node(exploit_agent))
     workflow.add_node("synthesize", make_synthesize_node(orchestrator_llm))
 
     workflow.add_edge(START, "classify")
-    workflow.add_conditional_edges("classify", route_to_agents, ["traffic", "patch"])
+    workflow.add_conditional_edges(
+        "classify", route_to_agents, ["traffic", "patch", "exploit"]
+    )
     workflow.add_edge("traffic", "synthesize")
     workflow.add_edge("patch", "synthesize")
+    workflow.add_edge("exploit", "synthesize")
     workflow.add_edge("synthesize", END)
 
     return workflow.compile()
@@ -94,16 +131,24 @@ def make_security_analysis_tool(inner_app):
 
     @tool
     async def security_analysis(query: str) -> str:
-        """Investigate captured CTF traffic, create Janus alert/drop rules, or
-        patch a vulnerable service.
+        """Investigate captured CTF traffic, create Janus alert/drop rules, patch
+        a vulnerable service, or build and run an exploit.
 
         Use this tool for ANY question about: ongoing attacks against a named
         service, suspicious requests / exploits, writing Janus alert or drop
-        rules, fixing a vulnerability in the source code, or rolling back a
-        previous patch. The tool internally routes to the traffic agent, the
-        patch agent, or both. Critical actions (drop rules, code deploy,
-        rollback) will pause for operator approval (human-in-the-loop) — when
-        that happens you will see a HITL prompt surfaced to the user.
+        rules, fixing a vulnerability in the source code, rolling back a
+        previous patch, or writing/replicating/running an exploit on the
+        exploitfarm. The tool internally routes to the traffic agent, the patch
+        agent, the exploit agent, or several in parallel. Critical actions (drop
+        rules, code deploy, rollback, exploit push/start) will pause for operator
+        approval (human-in-the-loop), when that happens you will see a HITL
+        prompt surfaced to the user.
+
+        IMPORTANT — make ONE call, not several, for a single goal. The exploit
+        agent finds the vulnerability in the source ITSELF, so for a request like
+        "find a vulnerability and write/test/start an exploit" issue a SINGLE
+        call describing the whole exploit goal — do NOT make a separate "find
+        vulnerability" call first (that re-reads the source twice and is slow).
         """
         result = await inner_app.ainvoke({"query": query})
         return result["final_answer"]

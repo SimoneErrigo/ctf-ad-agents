@@ -31,18 +31,29 @@ def _prompt_decision() -> dict[str, Any]:
         print("(answer 'a' or 'r')")
 
 
+def _show_interrupt(value: Any) -> None:
+    print("\n=== APPROVAL REQUESTED ===")
+    if isinstance(value, dict):
+        print(f"tool: {value.get('tool', '?')}")
+        print(f"action: {value.get('summary', '')}")
+    else:
+        print(f"  {value!r}")
+
+
 async def _drive_turn(agent, payload: Any, config: dict[str, Any]) -> dict[str, Any]:
-    """Run one user turn, pausing for operator approval whenever the graph interrupts."""
+    """Run one user turn, pausing for operator approval whenever the graph interrupts.
+
+    The graph can raise several interrupts in parallel (e.g. multiple drop rules).
+    LangGraph requires each pending interrupt to be resumed by its id, so we collect
+    a decision per interrupt and resume them all in one Command(resume={id: decision}).
+    """
     result = await agent.ainvoke(payload, config)
     while result.get("__interrupt__"):
-        value = getattr(result["__interrupt__"][0], "value", None)
-        print("\n=== APPROVAL REQUESTED ===")
-        if isinstance(value, dict):
-            print(f"tool: {value.get('tool', '?')}")
-            print(f"action: {value.get('summary', '')}")
-        else:
-            print(f"  {value!r}")
-        result = await agent.ainvoke(Command(resume=_prompt_decision()), config)
+        decisions: dict[str, dict[str, Any]] = {}
+        for intr in result["__interrupt__"]:
+            _show_interrupt(getattr(intr, "value", None))
+            decisions[intr.id] = _prompt_decision()
+        result = await agent.ainvoke(Command(resume=decisions), config)
     return result
 
 

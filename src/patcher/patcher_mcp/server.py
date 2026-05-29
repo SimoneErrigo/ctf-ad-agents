@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import logging
+from typing import AsyncIterator
 
 import uvicorn
 from fastmcp import FastMCP
@@ -22,18 +24,43 @@ INSTRUCTIONS = (
     "uncommitted work."
 )
 
+INSTRUCTIONS_READ = (
+    "Read-only view of service source code: resolve_service, ensure_service_repo "
+    "(clones locally), list_files, read_file, git_log, get_diff. Use it to "
+    "understand a vulnerable service. You cannot write, commit, or deploy."
+)
+
+# View name -> (instructions, tag set, mount prefix). The full patch view lives
+# at /mcp; the read-only view (consumed by the exploit agent) at /read/mcp.
+_VIEWS = {
+    "patch": (INSTRUCTIONS, {"patch"}, ""),
+    "read": (INSTRUCTIONS_READ, {"read"}, "/read"),
+}
+
+
+def _build_view(instructions: str, tags: set[str]) -> FastMCP:
+    view = FastMCP(name="patcher", instructions=instructions)
+    register_tools(view)
+    view.enable(tags=tags, only=True)
+    return view
+
 
 def build_app() -> Starlette:
-    mcp = FastMCP(name="patcher", instructions=INSTRUCTIONS)
-    register_tools(mcp)
-
     settings = get_settings()
-    sub_app = mcp.http_app(path=settings.patcher_mcp_path)
+
+    routes: list = []
+    sub_apps: list[Starlette] = []
+    for instructions, tags, prefix in _VIEWS.values():
+        view = _build_view(instructions, tags)
+        sub_app = view.http_app(path=settings.patcher_mcp_path)
+        sub_apps.append(sub_app)
+        if prefix:
+            routes.append(Mount(prefix, app=sub_app))
 
     async def index(_request):
         return JSONResponse({
             "service": "patcher-mcp",
-            "endpoint": settings.patcher_mcp_path,
+            "endpoints": {"patch": settings.patcher_mcp_path, "read": "/read" + settings.patcher_mcp_path},
             "workspace_root": str(settings.patcher_workspace_root),
             "vm": {
                 "host": settings.vm_ip,
@@ -43,13 +70,18 @@ def build_app() -> Starlette:
             },
         })
 
-    app = Starlette(
-        routes=[
-            Route("/_status", endpoint=index),
-            Mount("/", app=sub_app),  # /mcp comes from sub_app's own routes
-        ],
-        lifespan=sub_app.router.lifespan_context,
-    )
+    routes.append(Route("/_status", endpoint=index))
+    # The full "patch" view is mounted last at "/" so it does not shadow /read.
+    routes.append(Mount("/", app=sub_apps[0]))
+
+    @contextlib.asynccontextmanager
+    async def combined_lifespan(_app: Starlette) -> AsyncIterator[None]:
+        async with contextlib.AsyncExitStack() as stack:
+            for sub in sub_apps:
+                await stack.enter_async_context(sub.router.lifespan_context(sub))
+            yield
+
+    app = Starlette(routes=routes, lifespan=combined_lifespan)
     return app
 
 

@@ -41,7 +41,9 @@ from janus_mcp.tools import register_defender_tools, register_traffic_tools
 AGENT_VIEWS: dict[str, set[str]] = {
     "traffic": {"traffic"},
     "defender": {"defender"},
-    # "exploit":  {"exploit",  "shared"},
+    # The exploit agent reuses the read-only packet tools (tagged "traffic") to
+    # steal/replay attacks from captured traffic. It gets NO rule CRUD.
+    "exploit": {"traffic"},
 }
 
 
@@ -62,9 +64,18 @@ INSTRUCTIONS_DEFENDER = (
     "through the operator (human-in-the-loop)."
 )
 
+INSTRUCTIONS_EXPLOIT = (
+    "Read-only Janus traffic tools so you can find an attack against a service "
+    "and replay/steal it. Use `list_services` for ids, then `list_packets(q=...)` "
+    "to locate the malicious request and `get_packet`/`get_flow` to recover the "
+    "exact bytes (payload, headers, endpoint) to reproduce in your exploit. You "
+    "cannot write rules."
+)
+
 _AGENT_INSTRUCTIONS = {
     "traffic": INSTRUCTIONS_TRAFFIC,
     "defender": INSTRUCTIONS_DEFENDER,
+    "exploit": INSTRUCTIONS_EXPLOIT,
 }
 
 
