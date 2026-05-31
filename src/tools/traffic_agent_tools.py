@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
-from src.tools.hitl import apply_hitl
 from src.tools.mcp_client import MCPToolRegistry, build_registry
 
 
@@ -14,9 +13,9 @@ async def get_traffic_tools(registry: MCPToolRegistry | None = None) -> list[Bas
     validate_filter, get_filter_dsl, list_services, get_capture_status) PLUS
     rule CRUD (list_rules, create_rule, update_rule, delete_rule, list_alerts).
 
-    `create_rule` / `update_rule` are wrapped with HITL so that any
-    action that affects live traffic (action="drop" / "both") pauses for
-    operator approval before reaching Janus.
+    HITL for `create_rule` / `update_rule` is applied by the agent's
+    HumanInTheLoopMiddleware (`traffic_hitl`), not here, so the tools are
+    returned raw.
 
     Pass a pre-built `registry` when the application already loaded it at
     startup (recommended, avoids re-fetching tools for each agent). When
@@ -32,4 +31,4 @@ async def get_traffic_tools(registry: MCPToolRegistry | None = None) -> list[Bas
     # turn on the same THREAD_ID fails with a Bedrock contract error.
     for t in raw:
         t.handle_tool_error = True
-    return apply_hitl(raw)
+    return raw

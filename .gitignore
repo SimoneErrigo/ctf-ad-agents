@@ -162,6 +162,10 @@ venv.bak/
 .claude/
 .langgraph_api/
 
+# Agent Chat UI: third-party Next.js frontend, cloned locally and pointed at the
+# Agent Server (:2024). Run it from its own clone.
+agent-chat-ui/
+
 # Spyder project settings
 .spyderproject
 .spyproject

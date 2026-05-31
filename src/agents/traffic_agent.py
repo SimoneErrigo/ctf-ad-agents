@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langchain_aws.middleware import BedrockPromptCachingMiddleware
 
+from src.tools.hitl import traffic_hitl
 from src.tools.mcp_client import MCPToolRegistry
 from src.tools.traffic_agent_tools import get_traffic_tools
 
@@ -91,13 +92,13 @@ SYSTEM_PROMPT = (
     "- Start with `action=\"alert\"`. Alerts are non-blocking, they just observe matches "
     "and let the operator confirm precision via `list_alerts`. Only escalate to "
     "`action=\"drop\"` (or `\"both\"`) when the expression is provably tight; the "
-    "operator will be asked to approve any drop/both rule via HITL.\n"
+    "operator approves every rule write via HITL (alert included).\n"
     "- One rule per attack pattern. Don't create catch-alls. Use a short descriptive "
     "`name` like \"sqli-union-select-on-rceaas\". Use `list_rules` before creating to "
     "avoid duplicates (Janus rejects identical service_id + expression + action).\n"
-    "- If your `create_rule(drop|both)` call returns `status='rejected'`, the operator "
-    "declined: report the decision in your final answer, do NOT retry the same rule, "
-    "and consider proposing the alert variant instead."
+    "- If a rule write is rejected by the operator (the tool comes back with an error "
+    "noting the rejection), report the decision in your final answer, do NOT retry the "
+    "same rule, and consider proposing the alert variant instead."
 )
 
 
@@ -134,6 +135,7 @@ async def build_traffic_agent(registry: MCPToolRegistry | None = None):
                 ttl="5m",
                 min_messages_to_cache=0,
                 unsupported_model_behavior="raise",
-            )
+            ),
+            traffic_hitl(),
         ],
     )

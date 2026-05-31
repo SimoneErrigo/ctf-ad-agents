@@ -46,6 +46,9 @@ Hard routing rules:
   before doubling up. Extra exploits per store are fine only as backups.
 - If the user asks to STOP/kill a running exploit, or asks which exploits are
   running/active, include exploit (lifecycle only, do NOT rewrite/test).
+- For a BULK lifecycle request (start/run/stop ALL exploits, or several at once),
+  emit ONE exploit classification for the whole batch, never one per exploit; the
+  exploit agent enumerates them and acts on each.
 - If the user names an existing exploit and asks to start/run it, tell exploit
   to use that exact existing name and not rewrite/replace files unless asked to fix.
 - Include traffic only for a standalone traffic report or Janus rule/block/alert.
@@ -59,13 +62,25 @@ Hard routing rules:
   Janus traffic. Generic words like "find" do not mean traffic.
 - "find the bug/attack then exploit it" is exploit only unless the user also asks
   for a separate report, rule, or patch.
+- ANALYSIS-ONLY: if the user only asks to find/analyze/report/audit/describe/list
+  a vulnerability or attack and uses NO action verb (write/create/test/push/start/
+  run/replicate/steal an exploit, or fix/patch/deploy/rollback), route to exploit
+  in REPORT-ONLY mode: inspect the source and report the vulnerability, but DO NOT
+  build/test/push/start any exploit and DO NOT patch. "find the bug" WITHOUT an
+  explicit "then exploit/steal/fix it" is report-only, never a build task.
 
 Sub-question shape:
 - exploit (build): "For service X, build ONE Python exploit for ONLY <named bug/class if any>.
   SOURCE-ONLY and do not inspect Janus traffic unless the user said from/live/
   observed traffic. Test once, then push/start through HITL only after flags_found>=1."
+- exploit (report-only): "For service X, inspect the SOURCE and report the
+  vulnerability / attack surface for ONLY <named bug/class if any>. SOURCE-ONLY,
+  do not inspect Janus traffic unless the user said from/live/observed traffic.
+  DO NOT build, test, push, or start any exploit; report findings only."
 - exploit (lifecycle): "Stop the running exploit <name>" or "List the exploits
   currently running", no rewriting, no testing, just the lifecycle action.
+- exploit (bulk lifecycle): "Start ALL available registered exploits" / "Stop ALL
+  running exploits" as ONE task; the agent lists them and acts on each.
 - traffic: "Inspect only recent traffic for service X; report endpoint/parameter/
   payload evidence, or create the requested Janus rule via HITL."
 - patch: "Patch ONLY <named bug/class/path if any> in service X with a minimal source fix;

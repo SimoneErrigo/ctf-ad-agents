@@ -17,6 +17,7 @@ from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langchain_aws.middleware import BedrockPromptCachingMiddleware
 
+from src.tools.hitl import patch_hitl
 from src.tools.mcp_client import MCPToolRegistry
 from src.tools.patch_agent_tools import get_patch_tools
 
@@ -61,8 +62,9 @@ SYSTEM_PROMPT = (
     "Then call get_diff to inspect the result. If the diff is wrong, "
     "discard_changes and try again. A good patch is typically <30 lines.\n"
     "4. PROPOSE DEPLOY. Once the diff looks right, summarize the change and call "
-    "deploy(service). This will pause for operator approval. If status='rejected', "
-    "report the operator's decision and stop, do NOT redeploy or work around. "
+    "deploy(service). This will pause for operator approval. If the operator rejects "
+    "it (the tool comes back with an error noting the rejection), report the decision "
+    "and stop, do NOT redeploy or work around. "
     "If deploy returns ok=false, status=error, or mentions a hook/deploy "
     "failure, report deployment FAILED. Do not infer success from a remote "
     "branch update; only report live/deployed when deploy returns deployed=true "
@@ -136,6 +138,7 @@ async def build_patch_agent(registry: MCPToolRegistry | None = None):
                 ttl="5m",
                 min_messages_to_cache=0,
                 unsupported_model_behavior="raise",
-            )
+            ),
+            patch_hitl(),
         ],
     )
