@@ -50,5 +50,6 @@ Tips:
   - Regex is Go RE2 (no lookaround/backrefs). Anchor with ^ / $.
   - `contains` is case-sensitive; use `icontains` for ASCII case-insensitive.
   - Always run validate_filter before list_packets on non-trivial q.
+  - `session_id` can appear in packet rows, but it is not filterable in q.
   - If a probe returns 0 packets, broaden (drop service / try `url` / try
     `icontains` / check response side) before concluding.

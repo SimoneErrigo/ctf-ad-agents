@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-
 from langchain_core.tools import tool
+from langgraph.errors import GraphBubbleUp, GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
 from src.agents.conversational import build_conversational_agent
@@ -16,7 +15,6 @@ from src.agents.orchestrator import (
 from src.agents.exploit_agent import build_exploit_agent
 from src.agents.patch_agent import build_patch_agent
 from src.agents.traffic_agent import build_traffic_agent
-from src.persistence import postgres_checkpointer
 from src.state.state import AgentInput, RouterState
 from src.tools.mcp_client import (
     build_exploiter_registry,
@@ -75,7 +73,7 @@ def make_exploit_node(exploit_agent):
     async def query_exploit_agent(state: AgentInput) -> dict:
         result = await exploit_agent.ainvoke(
             {"messages": [{"role": "user", "content": state["query"]}]},
-            {"recursion_limit": 50},
+            {"recursion_limit": 60},
         )
         return {
             "results": [
@@ -132,48 +130,76 @@ def make_security_analysis_tool(inner_app):
     @tool
     async def security_analysis(query: str) -> str:
         """Investigate captured CTF traffic, create Janus alert/drop rules, patch
-        a vulnerable service, or build and run an exploit.
+        a vulnerable service, or build/run/stop an exploit.
 
         Use this tool for ANY question about: ongoing attacks against a named
         service, suspicious requests / exploits, writing Janus alert or drop
         rules, fixing a vulnerability in the source code, rolling back a
-        previous patch, or writing/replicating/running an exploit on the
-        exploitfarm. The tool internally routes to the traffic agent, the patch
-        agent, the exploit agent, or several in parallel. Critical actions (drop
-        rules, code deploy, rollback, exploit push/start) will pause for operator
-        approval (human-in-the-loop), when that happens you will see a HITL
-        prompt surfaced to the user.
+        previous patch, writing/replicating/running an exploit on the
+        exploitfarm, STOPPING a running exploit, or checking which exploits are
+        currently running. The tool internally routes to the traffic agent, the
+        patch agent, the exploit agent, or several in parallel. Critical actions
+        (drop rules, code deploy, rollback, exploit push/start) will pause for
+        operator approval (human-in-the-loop), when that happens you will see a
+        HITL prompt surfaced to the user. Stopping or listing exploits is NOT
+        gated and runs immediately.
 
-        IMPORTANT — make ONE call, not several, for a single goal. The exploit
+        IMPORTANT: make ONE call, not several, for a single goal. The exploit
         agent finds the vulnerability in the source ITSELF, so for a request like
         "find a vulnerability and write/test/start an exploit" issue a SINGLE
-        call describing the whole exploit goal — do NOT make a separate "find
+        call describing the whole exploit goal, do NOT make a separate "find
         vulnerability" call first (that re-reads the source twice and is slow).
+        If the user names a bug/class and does not explicitly say from/live/
+        observed traffic, put SOURCE-ONLY / do not inspect traffic in the query.
         """
-        result = await inner_app.ainvoke({"query": query})
-        return result["final_answer"]
+        try:
+            result = await inner_app.ainvoke({"query": query})
+            return result["final_answer"]
+        except GraphBubbleUp:
+            # HITL interrupts (and other LangGraph control-flow signals) MUST
+            # propagate: the ToolNode re-raises GraphBubbleUp so the interrupt
+            # reaches the conversational agent's checkpointer, which pauses the
+            # run. On Command(resume=...) the inner graph (sharing the inherited
+            # checkpointer + nested checkpoint_ns) resumes inside the pending
+            # interrupt instead of restarting. Swallowing it here breaks HITL.
+            raise
+        except GraphRecursionError:
+            # A sub-agent ran out of steps without reaching a stop condition
+            # (e.g. the exploit agent churning test->edit->test). This is a
+            # terminal failure for THIS goal, instruct the caller NOT to retry,
+            # otherwise the conversational agent loops the whole analysis again
+            # and multiplies cost. Surfaced as a normal tool result so the
+            # checkpoint has no dangling tool_use.
+            return (
+                "[security_analysis failed: the specialist agent exhausted its "
+                "step budget without producing a working result (likely an "
+                "exploit that could not be reproduced). Do NOT retry this query "
+                "automatically. Report the failure to the operator and ask how to "
+                "proceed (e.g. a different vulnerability, or more recon).]"
+            )
+        except Exception as e:
+            # Return real errors as a string so LangGraph always stores a
+            # tool_result and the checkpoint never has a dangling tool_use.
+            return f"[security_analysis error: {type(e).__name__}: {e}]"
 
     return security_analysis
 
 
-@asynccontextmanager
-async def build_chat_app():
-    """Build the stateful conversational agent.
+async def make_graph():
+    """Factory entrypoint for the Agent Server (``langgraph.json``).
 
-    Wraps the stateless orchestrator graph as a tool and exposes it through
-    a conversational agent persisted in Postgres. Use as an async context
-    manager so the checkpointer's connection pool is opened/closed correctly:
+    Wraps the stateless orchestrator graph as the ``security_analysis`` tool and
+    exposes it through the conversational agent. We pass ``checkpointer=None``:
+    the Agent Server injects persistence itself (Postgres in a deployment,
+    in-memory under ``langgraph dev``), and a custom checkpointer here would be
+    ignored, so the platform owns threads/checkpoints. Point the server's
+    ``DATABASE_URI`` at Postgres to persist them.
 
-        async with build_chat_app() as agent:
-            cfg = {"configurable": {"thread_id": "..."}}
-            await agent.ainvoke({"messages": [...]}, cfg)
-
-    HITL interrupts raised inside the orchestrator subgraph (drop rule
-    approvals, patch deploy/rollback approvals) propagate up to this layer's
-    checkpointer, which is what allows the run to pause and later resume via
-    `Command(resume=<decision>)`.
+    HITL interrupts raised inside the orchestrator subgraph (drop-rule, patch
+    deploy/rollback, exploit push/start) propagate up to the server-managed
+    checkpointer, which pauses the run and lets it resume via
+    ``Command(resume=<HumanResponse>)``.
     """
     inner_app = await build_app()
     security_tool = make_security_analysis_tool(inner_app)
-    async with postgres_checkpointer() as checkpointer:
-        yield build_conversational_agent([security_tool], checkpointer)
+    return build_conversational_agent([security_tool], checkpointer=None)

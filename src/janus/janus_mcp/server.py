@@ -65,11 +65,19 @@ INSTRUCTIONS_DEFENDER = (
 )
 
 INSTRUCTIONS_EXPLOIT = (
-    "Read-only Janus traffic tools so you can find an attack against a service "
-    "and replay/steal it. Use `list_services` for ids, then `list_packets(q=...)` "
-    "to locate the malicious request and `get_packet`/`get_flow` to recover the "
-    "exact bytes (payload, headers, endpoint) to reproduce in your exploit. You "
-    "cannot write rules."
+    "`list_services` is ALWAYS available: it returns each proxied service's "
+    "`listen_addr`/`listen_port` (where the service is actually reachable on the "
+    "team host) and `target_addr` (the docker-compose host-port behind it) — use "
+    "it to resolve the exploit's target port. The packet tools "
+    "(list_packets/get_packet/get_flow/validate_filter) are for explicit traffic "
+    "tasks only: use them when the operator says from/live/observed traffic or to "
+    "replicate a captured attack; for named source-vulnerability tasks do not "
+    "call them. When traffic is allowed, use a service-scoped "
+    "`list_packets(q=..., sort=\"desc\", summary=true, limit<=10)`, then fetch at "
+    "most two candidate packets with `get_packet` and one `get_flow` only if the "
+    "exact request chain is needed. Never broad-search with `summary=false`. You "
+    "cannot write rules. Filter `q` supports only FILTERS.md fields; `session_id` "
+    "may appear in rows but is not filterable."
 )
 
 _AGENT_INSTRUCTIONS = {
