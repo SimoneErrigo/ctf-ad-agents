@@ -29,126 +29,47 @@ def build_orchestrator_llm() -> ChatBedrockConverse:
     )
 
 
-CLASSIFY_PROMPT = """Analyze this query and determine which agent(s) to consult.
-For each relevant agent, generate a targeted sub-question optimized for that agent.
+CLASSIFY_PROMPT = """Route the operator request to the smallest set of agents.
 
-Available agents:
-- traffic: Analyzes network traffic captured by Janus and, when explicitly
-  asked, can write Janus alert/drop rules. Use for: "are we under attack?",
-  "what is hitting service X?", "show me the exploit", "create an alert rule
-  for that pattern", "block this request". Drop rules require operator
-  approval (HITL).
-- patch: Reads service source code and produces a minimal source-level patch,
-  then deploys it to the competition VM via git. Use for: "patch this bug",
-  "fix the vulnerability in service X", "deploy a fix that blocks this
-  attack at the code level", "rollback the last patch". Every deploy /
-  rollback requires operator approval (HITL).
-- exploit: Writes a Python exploit and runs it on the team's exploitfarm via
-  xfarm. It is self-sufficient: it reads the attack from captured traffic and
-  the service source on its own. Use for: "write/create an exploit for service
-  X", "replicate the attack they are running on us", "steal that exploit from
-  the traffic", "run/launch the exploit". It tests against the NOP team first;
-  pushing source and launching against all teams require operator approval (HITL).
+Agents:
+- traffic: recent Janus traffic reports and Janus alert/drop rules.
+- patch: source fix, deploy, rollback.
+- exploit: write/test/push/start/STOP a Python exploit via xfarm, and report
+  which exploits are currently running.
 
-Routing rules:
-- Pick the SMALLEST set of agents that can answer. Most queries are single-agent.
-- Send to BOTH when the user explicitly asks for traffic analysis AND a patch
-  (e.g. "find the attack and patch it") OR asks for a live Janus rule AND a
-  source patch in the same request (e.g. "find SQLi, make a drop rule, then
-  patch it"). In that case the traffic sub-question must BOTH produce concrete
-  evidence (service/endpoint/parameter/payload) and, when the user asked for a
-  rule, create or update the requested Janus rule through the HITL tool.
-- Route to `exploit` whenever the user asks to write, create, replicate, steal,
-  or run an exploit. The exploit agent reads traffic itself, so you do NOT need
-  to also route to `traffic` just to feed it, only add `traffic` if the user
-  separately wants a traffic report or a Janus rule. You MAY combine `exploit`
-  with `patch` (e.g. "patch CC-Forms and also build an exploit for the same
-  bug"); both run in parallel and each inspects what it needs on its own.
-- INSTRUMENTAL vs DELIVERABLE traffic: when the user says "find / identify /
-  look at the attack (in the traffic) AND (then) build / write / replicate an
-  exploit", the "find" is INSTRUMENTAL to the exploit, route to `exploit` ONLY.
-  The exploit agent reads the traffic itself to recover the attack. Add
-  `traffic` as a SECOND source only when the user asks for a STANDALONE traffic
-  deliverable in its own right (a written traffic report for the operator, or a
-  Janus alert/drop rule), not merely as a step toward the exploit.
-- INSTRUMENTAL vs DELIVERABLE source: same rule for the code. "find / identify a
-  vulnerability in the source AND (then) write / test / start an exploit" → the
-  "find" is INSTRUMENTAL, route to `exploit` ONLY (it reads the source itself to
-  locate the bug). Add `patch` as a SECOND source only when the user separately
-  wants the bug FIXED / deployed, not merely identified for the exploit.
-- Do NOT route a pure "explain / summarize" question to the patch or exploit agent.
-- Do NOT satisfy "make/create/update a drop rule" by merely reporting a rule
-  from conversation memory. The traffic agent must verify current Janus rules
-  in this run, and must call create_rule/update_rule if the requested live rule
-  is absent or stale.
+Hard routing rules:
+- If the user asks to write/create/test/push/start/run/replicate/steal an
+  exploit, include exploit. Do NOT also include traffic just to feed exploit.
+- If the user asks for "another exploit" / "more flags" / does not name a
+  service, tell exploit to PREFER a FLAG STORE (farm service) not already
+  covered (it sees per-service coverage in farm_services), cover all stores
+  before doubling up. Extra exploits per store are fine only as backups.
+- If the user asks to STOP/kill a running exploit, or asks which exploits are
+  running/active, include exploit (lifecycle only, do NOT rewrite/test).
+- If the user names an existing exploit and asks to start/run it, tell exploit
+  to use that exact existing name and not rewrite/replace files unless asked to fix.
+- Include traffic only for a standalone traffic report or Janus rule/block/alert.
+- Include patch only for fix/patch/deploy/rollback.
+- Preserve scope in every sub-question: service name, any named bug/class phrase,
+  source vs traffic wording, and requested actions.
+- If a bug/class is named, whatever it is, the exploit/patch sub-question must
+  say ONLY that named scope; no fallback bugs.
+- If a bug/class is named and the user did not explicitly say from/live/observed
+  traffic, the exploit/patch sub-question must say SOURCE-ONLY and DO NOT inspect
+  Janus traffic. Generic words like "find" do not mean traffic.
+- "find the bug/attack then exploit it" is exploit only unless the user also asks
+  for a separate report, rule, or patch.
 
-Return ONLY the sources that are relevant. Each source should have a targeted
-sub-question optimized for that specific domain.
-
-The traffic agent is time-constrained, so its sub-question MUST scope the work:
-name the specific service if given, ask only about RECENT traffic, steer toward
-flagged / flag-id-bearing requests, and tell it to stop as soon as the attack(s)
-are identified with evidence. Keep it to one or two sentences.
-
-The patch agent's sub-question MUST name the target service and, when
-available, the attack technique or vulnerable code path the operator (or the
-traffic agent) already identified. Tell it to propose a minimal patch and to
-go through the HITL gate before deploying.
-
-The exploit agent's sub-question MUST name the target service and PRESERVE the
-operator's scope: if the user said "in/from the source code", tell it to find
-the bug by reading the source and NOT to inspect traffic; only when the user
-referenced an ongoing/observed attack (or said "from traffic") tell it to
-recover that attack from captured traffic and replicate it. Tell it to write
-ONE exploit for ONE vulnerability, test it against the NOP team first, and go
-through the HITL gate before pushing / starting against all teams.
-
-Examples:
-- User: "Are there any attacks in the RCEaas service?"
-  - traffic: "Which attacks target the RCEaas service? Inspect only recent
-    RCEaas traffic, prioritising flagged or flag-id-bearing requests; identify
-    the attack pattern with evidence and stop as soon as it is confirmed."
-- User: "Patch the path-traversal bug in ccforms."
-  - patch: "Patch the path-traversal vulnerability in service 'ccforms'.
-    Locate the unsafe filename handling, propose a minimal fix that rejects
-    '..' and absolute paths, then propose deploy via HITL."
-- User: "Find the SQLi on web1 and fix it."
-  - traffic: "Identify the SQLi pattern hitting service 'web1' from recent
-    traffic; report the offending endpoint, parameter, and a sample payload."
-  - patch: "Patch the SQLi in service 'web1'. Use the endpoint/parameter the
-    traffic agent will report; prefer query parameterization; propose deploy
-    via HITL."
-- User: "Find SQLi, make a drop rule, and patch it."
-  - traffic: "Identify the recent SQLi pattern, verify current Janus rules, and
-    create a tight drop rule for the payload through HITL if one is not already
-    active. Report service id, expression, and rule id."
-  - patch: "Patch the SQLi in the affected service using the endpoint/parameter
-    reported by traffic; propose deploy via HITL."
-- User: "Are they attacking CC-Forms? If so, patch it and build an exploit that
-  replicates their attack."
-  - patch: "Patch the vulnerability being exploited in service 'CC-Forms'.
-    Identify the bug from the source, propose a minimal fix, deploy via HITL."
-  - exploit: "Write an exploit for service 'CC-Forms' that replicates the attack
-    currently hitting it: find the malicious request in recent captured traffic,
-    reproduce it, test against the NOP team, then push/start via HITL."
-- User: "Write an exploit for the RCEaas service."
-  - exploit: "Write a Python exploit for service 'RCEaas': read its source to
-    find an exploitable bug (or recover an attack from traffic), implement it,
-    test against the NOP team, and go through HITL before pushing/starting."
-- User: "Find the exploit they are launching on service X, then analyze the code
-  and build an exploit for X." (the "find" is instrumental, exploit only)
-  - exploit: "Write an exploit for service 'X' replicating the live attack:
-    locate the malicious request in recent captured traffic and recover its
-    exact bytes, read the service source to understand the bug (e.g. a crypto
-    flaw that lets attackers forge tokens, which is not visible from traffic
-    alone), implement it, test against the NOP team, then push/start via HITL."
-- User: "Give me a report of what's hitting service X AND build an exploit that
-  replicates it." (standalone traffic deliverable + exploit -> both sources)
-  - traffic: "Report the attack(s) hitting service 'X' from recent traffic:
-    endpoint, parameter, sample payload, and evidence; stop once confirmed."
-  - exploit: "Write an exploit for service 'X' replicating the live attack:
-    recover it from captured traffic, read the source as needed, test against
-    the NOP team, then push/start via HITL."
+Sub-question shape:
+- exploit (build): "For service X, build ONE Python exploit for ONLY <named bug/class if any>.
+  SOURCE-ONLY and do not inspect Janus traffic unless the user said from/live/
+  observed traffic. Test once, then push/start through HITL only after flags_found>=1."
+- exploit (lifecycle): "Stop the running exploit <name>" or "List the exploits
+  currently running", no rewriting, no testing, just the lifecycle action.
+- traffic: "Inspect only recent traffic for service X; report endpoint/parameter/
+  payload evidence, or create the requested Janus rule via HITL."
+- patch: "Patch ONLY <named bug/class/path if any> in service X with a minimal source fix;
+  deploy through HITL if requested."
 """
 
 

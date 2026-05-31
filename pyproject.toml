@@ -15,3 +15,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.3.4",
     "python-dotenv>=1.0.0",
 ]
+
+[dependency-groups]
+# `langgraph dev` (in-memory Agent Server) for local dev + Agent Chat UI.
+dev = ["langgraph-cli[inmem]"]

@@ -163,7 +163,13 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
     async def list_packets(
         q: Annotated[
             str | None,
-            Field(description="Janus filter DSL expression. Empty matches all. Validate first."),
+            Field(
+                description=(
+                    "Janus filter DSL expression. Empty matches all. Validate first. "
+                    "Only documented FILTERS.md fields are filterable; session_id is "
+                    "returned in rows but cannot be used in q."
+                )
+            ),
         ] = None,
         limit: Annotated[
             int,
@@ -173,14 +179,22 @@ def register_traffic_tools(mcp: FastMCP, client: JanusClient) -> None:
         sort: Literal["asc", "desc"] = "desc",
         summary: Annotated[
             bool,
-            Field(description="If true (default) bodies/headers are stripped; use get_packet for full detail."),
+            Field(
+                description=(
+                    "If true (default) bodies/headers are stripped; use get_packet "
+                    "for full detail. summary=false is expensive; use only after "
+                    "selecting a tiny candidate set, never for broad search."
+                )
+            ),
         ] = True,
     ) -> dict[str, Any]:
         """Query captured packets via the Janus filter DSL.
 
         Returns `{packets, total, limit, offset}`. Compose service / method /
         direction / time filters inside `q`. For 'recent' use sort=desc + larger
-        limit — never invent time_from/time_to.
+        limit — never invent time_from/time_to. `session_id` is returned in some
+        rows but is not filterable. Keep `summary=true` for search; use
+        `get_packet` for full detail.
         """
         capped = min(limit, s.janus_max_limit)
         if summary:

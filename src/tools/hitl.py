@@ -8,68 +8,87 @@ from langgraph.types import interrupt
 
 log = logging.getLogger(__name__)
 
-def is_approval(decision: Any) -> bool:
-    """Return True iff `decision` represents an explicit operator approval."""
-    if isinstance(decision, dict):
-        return bool(decision.get("approved"))
-    if isinstance(decision, str):
-        return decision.strip().lower() in {"approve", "approved", "yes", "y", "ok"}
-    return False
+# Agent Inbox interrupt contract. We raise a HumanInterrupt-shaped value and read
+# back a HumanResponse, which Agent Chat UI renders as an accept/respond/ignore
+# card. We use plain dicts rather than importing the TypedDicts.
+#  Schema: https://github.com/langchain-ai/agent-inbox
+#
+# What the operator may do with a controlled action. allow_edit stays off: these are
+# destructive / outward-facing calls, approve-or-reject is enough. Flip
+# allow_edit to True to let the operator tweak args before the call runs,
+# _interpret_response already applies the edited args, so it is a safe toggle.
+_HITL_CONFIG = {
+    "allow_accept": True,
+    "allow_respond": True,
+    "allow_edit": False,
+    "allow_ignore": True,
+}
 
 
-def rejection_reason(decision: Any) -> str | None:
-    """Extraction of a rejection reason from the resume payload."""
-    if isinstance(decision, dict):
-        reason = decision.get("reason")
-        return reason if isinstance(reason, str) and reason else None
-    if isinstance(decision, str):
-        s = decision.strip()
-        if s.lower().startswith("reject"):
-            # accept "reject" and "reject: <reason>"
-            rest = s.split(":", 1)
-            return rest[1].strip() if len(rest) == 2 else None
-        return None
-    return None
+def _interpret_response(response: Any) -> tuple[bool, str | None, dict | None]:
+    """Map an Agent Inbox HumanResponse to ``(approved, reason, edited_args)``.
 
+    Resume arrives as a list of HumanResponse (one per interrupt raised); we raise
+    exactly one, so we read the first element. Anything we do not recognise is
+    treated as a rejection, we never silently approve.
+    """
+    if isinstance(response, list):
+        response = response[0] if response else {}
+    if not isinstance(response, dict):
+        return False, "operator rejected", None
 
-def _format_rejection(payload: dict[str, Any], decision: Any) -> dict[str, Any]:
-    return {
-        "status": "rejected",
-        "reason": rejection_reason(decision) or "operator rejected",
-        "payload": payload,
-    }
+    rtype = response.get("type")
+    if rtype == "accept":
+        return True, None, None
+    if rtype == "edit":
+        # Approved with edits: HumanResponse.args is an ActionRequest
+        # {"action": ..., "args": {...}}; run the tool with the new args.
+        request = response.get("args")
+        edited = request.get("args") if isinstance(request, dict) else None
+        return True, None, edited if isinstance(edited, dict) else None
+    if rtype == "response":
+        reason = response.get("args")
+        return (
+            False,
+            reason if isinstance(reason, str) and reason else "operator rejected",
+            None,
+        )
+    # "ignore" or anything unexpected
+    return False, "operator rejected", None
 
 
 def _wrap_with_hitl(
     mcp_tool: BaseTool,
     *,
-    type: str,
     description_suffix: str,
     should_control: callable,
     summary: callable,
 ) -> BaseTool:
     """Generic HITL wrapper.
 
-    Reuses the MCP tool's args_schema so the agent sees the same signature.
+    Reuses the MCP tool's args_schema so the agent sees the same signature. When
+    ``should_control(args)`` is true the call pauses via an Agent Inbox interrupt
+    until the operator accepts (optionally with edited args) or rejects.
     """
 
     async def _controlled(**kwargs: Any) -> Any:
         if should_control(kwargs):
-            decision = interrupt({
-                "type": type,
-                "tool": mcp_tool.name,
-                "summary": summary(kwargs),
-                "payload": kwargs,
-                "prompt": (
-                    "Operator approval required for a critical action. "
-                    "Reply with {'approved': true} to apply, or "
-                    "{'approved': false, 'reason': '...'} to reject."
-                ),
-            })
-            if not is_approval(decision):
-                log.info("HITL rejected %s: %s", mcp_tool.name, kwargs)
-                return _format_rejection(kwargs, decision)
-            log.info("HITL approved %s", mcp_tool.name)
+            response = interrupt([
+                {
+                    "action_request": {"action": mcp_tool.name, "args": kwargs},
+                    "config": _HITL_CONFIG,
+                    "description": summary(kwargs),
+                }
+            ])
+            approved, reason, edited = _interpret_response(response)
+            if not approved:
+                log.info("HITL rejected %s: %s", mcp_tool.name, reason)
+                return {"status": "rejected", "reason": reason, "payload": kwargs}
+            if edited:
+                log.info("HITL approved %s with edits", mcp_tool.name)
+                kwargs = edited
+            else:
+                log.info("HITL approved %s", mcp_tool.name)
         return await mcp_tool.ainvoke(kwargs)
 
     return StructuredTool.from_function(
@@ -94,7 +113,6 @@ def wrap_rule_create(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_rule_create",
         description_suffix=(
             "HITL: when action='drop' or 'both', the call is paused and the "
             "operator must approve before the rule is created in Janus. "
@@ -125,7 +143,6 @@ def wrap_rule_update(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_rule_update",
         description_suffix=(
             "HITL: updates that set action='drop' or 'both' are paused until "
             "the operator approves. Updates that keep / set action='alert' "
@@ -147,7 +164,6 @@ def wrap_patch_deploy(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_patch_deploy",
         description_suffix=(
             "HITL: deploying a patch pushes code to the competition VM and "
             "triggers a service rebuild, always paused for operator approval."
@@ -168,7 +184,6 @@ def wrap_patch_rollback(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_patch_rollback",
         description_suffix=(
             "HITL: a rollback rewinds the deployed code on the VM, always "
             "paused for operator approval."
@@ -186,11 +201,10 @@ def wrap_exploit_start(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_exploit_start",
         description_suffix=(
             "HITL: starting an exploit attacks every team's service and submits "
             "flags, always paused for operator approval. Use test_exploit "
-            "(NOP team) first; it is NOT gated."
+            "(default target host) first; it is NOT gated."
         ),
         should_control=lambda _kw: True,
         summary=_summary,
@@ -205,7 +219,6 @@ def wrap_exploit_push(mcp_tool: BaseTool) -> BaseTool:
 
     return _wrap_with_hitl(
         mcp_tool,
-        type="approve_exploit_push",
         description_suffix=(
             "HITL: pushing uploads the exploit source to the shared farm where "
             "workers pick it up, paused for operator approval."
@@ -225,11 +238,10 @@ _DEFAULT_WRAPPERS: dict[str, callable] = {
 }
 
 
-def apply_hitl(tools: list[BaseTool], wrappers: dict[str, callable] | None = None) -> list[BaseTool]:
+def apply_hitl(tools: list[BaseTool]) -> list[BaseTool]:
     """Return a new list of tools with HITL wrappers applied by name."""
-    table = wrappers if wrappers is not None else _DEFAULT_WRAPPERS
     out: list[BaseTool] = []
     for t in tools:
-        wrapper = table.get(t.name)
+        wrapper = _DEFAULT_WRAPPERS.get(t.name)
         out.append(wrapper(t) if wrapper else t)
     return out

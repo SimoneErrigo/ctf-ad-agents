@@ -202,6 +202,7 @@ true      false                                  # booleans
 - CIDR works on `src` / `dst` / `peer` only.
 - Flag rule is locked to `alert`: dropping flag-bearing packets breaks the checker.
 - Filters touching `body` / `raw` / `header` fall back to polling on Traffic (SSE doesn't carry those).
+- `session_id` can appear in packet rows for grouping, but it is **not** a filter field.
 - AND binds tighter than OR — parenthesize when in doubt.
 
 ---

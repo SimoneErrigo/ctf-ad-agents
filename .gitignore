@@ -160,6 +160,7 @@ env.bak/
 venv.bak/
 .vscode/
 .claude/
+.langgraph_api/
 
 # Spyder project settings
 .spyderproject
