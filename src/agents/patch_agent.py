@@ -92,7 +92,8 @@ SYSTEM_PROMPT = (
     "OUTPUT:\n"
     "End with a concise final report: which service, which files touched, the "
     "commit SHA, whether the deploy was approved/rejected/pending, and one "
-    "sentence on why the fix closes the bug."
+    "sentence on why the fix closes the bug. State this status IN THE TEXT: the "
+    "report is the only thing relayed to the supervisor, your tool results are not."
 )
 
 
@@ -133,6 +134,7 @@ async def build_patch_agent(registry: MCPToolRegistry | None = None):
         model=_build_llm(),
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        name="patch",
         middleware=[
             BedrockPromptCachingMiddleware(
                 ttl="5m",

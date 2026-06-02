@@ -1,16 +1,6 @@
-from typing import Annotated, Literal, TypedDict
-import operator
+from typing import Literal, TypedDict
 
-
-class AgentInput(TypedDict):
-    """Simple input state for each subagent."""
-    query: str
-
-
-class AgentOutput(TypedDict):
-    """Output from each subagent."""
-    source: str
-    result: str
+from langgraph.graph import MessagesState
 
 
 class Classification(TypedDict):
@@ -19,8 +9,10 @@ class Classification(TypedDict):
     query: str
 
 
-class RouterState(TypedDict):
+class RouterState(MessagesState):
+    """Shared state for the whole graph. `messages` (from MessagesState) is the
+    single conversation channel: the supervisor, the sub-agents and their tool
+    calls all append to it, so the UI renders every agent's reasoning. `query`
+    holds the supervisor's dispatched task; `classifications` the routing fan-out."""
     query: str
     classifications: list[Classification]
-    results: Annotated[list[AgentOutput], operator.add]  # Reducer collects parallel results
-    final_answer: str

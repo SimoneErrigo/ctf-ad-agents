@@ -130,6 +130,7 @@ async def build_traffic_agent(registry: MCPToolRegistry | None = None):
         model=_build_llm(),
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        name="traffic",
         middleware=[
             BedrockPromptCachingMiddleware(
                 ttl="5m",

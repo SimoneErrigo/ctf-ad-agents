@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from langchain_aws import ChatBedrockConverse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import Send
 from pydantic import BaseModel, Field
 
@@ -18,10 +19,22 @@ class ClassificationResult(BaseModel):
 
 
 def build_orchestrator_llm() -> ChatBedrockConverse:
-    """LLM powering the orchestrator (classification + multi-source synthesis)."""
+    """LLM powering the orchestrator's classification (routing) step."""
     return ChatBedrockConverse(
         name="orchestrator-llm",
         model=os.environ["ROUTER_AGENT_MODEL"],
+        region_name=os.environ["REGION_NAME"],
+        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+        temperature=0.1,
+    )
+
+
+def build_synthesis_llm() -> ChatBedrockConverse:
+    """LLM for the final synthesis node."""
+    return ChatBedrockConverse(
+        name="synthesis-llm",
+        model=os.environ.get("SYNTHESIS_MODEL") or os.environ.get("CHAT_AGENT_MODEL") or os.environ["ROUTER_AGENT_MODEL"],
         region_name=os.environ["REGION_NAME"],
         aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
@@ -89,9 +102,13 @@ Sub-question shape:
 
 
 def route_to_agents(state: RouterState) -> list[Send]:
-    """Fan out to sub-agents based on the classifications produced by classify."""
+    """Fan out to sub-agents based on the classifications produced by classify.
+
+    Each sub-agent is a subgraph node on the shared `messages` channel, so we
+    hand it ONLY its scoped sub-question as the input message; its own reasoning
+    and tool calls merge back into the shared transcript (visible in the UI)."""
     return [
-        Send(c["source"], {"query": c["query"]})
+        Send(c["source"], {"messages": [HumanMessage(content=c["query"])]})
         for c in state["classifications"]
     ]
 
@@ -109,37 +126,65 @@ def make_classify_node(structured_llm):
     return classify_query
 
 
-def make_synthesize_node(llm):
-    """Build the ``synthesize`` node: merge sub-agent results into a final answer."""
+SYNTHESIS_PROMPT = (
+    "You write the FINAL answer to the operator of an Attack & Defense CTF, from "
+    "the specialist reports below. Open with a one-line combined verdict, then "
+    "synthesize ACROSS all specialists and cross-reference their findings (e.g. "
+    "which observed attack maps to which source vulnerability). Be concise and do "
+    "NOT repeat the reports verbatim, the operator can already see them. Relay "
+    "results honestly: HITL actions (drop/both rules, deploy/rollback, "
+    "push_exploit, start_exploit) pause for approval, if one was rejected report "
+    "it and stop; never upgrade pending or failed status into success; for "
+    "exploits claim LIVE/started/flags only if a report explicitly shows a "
+    "successful test (flags_found>=1) plus successful push/start."
+)
 
-    async def synthesize_results(state: RouterState) -> dict:
-        results = state["results"]
-        if not results:
-            return {"final_answer": "No results found from any knowledge source."}
+_SPECIALISTS = ("traffic", "patch", "exploit")
 
-        # Single source: the sub-agent already produced a full report.
-        # Skip the extra synthesis LLM call (about 5s + a model round-trip).
-        if len(results) == 1:
-            return {"final_answer": results[0]["result"]}
 
-        formatted = [
-            f"**From {r['source'].title()}:**\n{r['result']}"
-            for r in results
-        ]
-        synthesis = await llm.ainvoke([
-            {
-                "role": "system",
-                "content": (
-                    f"Synthesize these search results to answer the original "
-                    f"question: \"{state['query']}\"\n\n"
-                    "- Combine information from multiple sources without redundancy\n"
-                    "- Highlight the most relevant and actionable information\n"
-                    "- Note any discrepancies between sources\n"
-                    "- Keep the response concise and well-organized"
-                ),
-            },
-            {"role": "user", "content": "\n\n".join(formatted)},
+def _message_text(msg: AIMessage) -> str:
+    """Flatten an AIMessage's content (string or content blocks) to plain text."""
+    content = msg.content
+    if isinstance(content, str):
+        return content
+    parts = [
+        b.get("text", "")
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def make_final_node(synthesis_llm):
+    """Build the ``final`` node: combine the specialists' reports into one
+    operator-facing answer. Specialists fan in HERE (not the supervisor), so the
+    node builds its own System+Human prompt and the model replies to a user turn,
+    writing a fresh combined answer instead of prefill-continuing the last report.
+    The reply is appended to the shared ``messages`` so the UI renders it."""
+
+    async def synthesize(state: RouterState) -> dict:
+        wanted = {c["source"] for c in state.get("classifications") or []} or set(
+            _SPECIALISTS
+        )
+        
+        reports: dict[str, str] = {}
+        for msg in state["messages"]:
+            if isinstance(msg, AIMessage) and msg.name in wanted:
+                text = _message_text(msg)
+                if text:
+                    reports[msg.name] = text
+        request = state.get("query") or "the operator's request"
+        blocks = "\n\n".join(
+            f"## {name} specialist report\n{text}" for name, text in reports.items()
+        )
+        human = (
+            f"Operator request:\n{request}\n\n{blocks}\n\n"
+            "Write the final answer for the operator now."
+        )
+        result = await synthesis_llm.ainvoke([
+            SystemMessage(content=SYNTHESIS_PROMPT),
+            HumanMessage(content=human),
         ])
-        return {"final_answer": synthesis.content}
+        return {"messages": [AIMessage(content=result.content, name="supervisor")]}
 
-    return synthesize_results
+    return synthesize
