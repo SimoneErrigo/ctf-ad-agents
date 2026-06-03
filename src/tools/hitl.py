@@ -1,247 +1,133 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.types import interrupt
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import ToolMessage
 
-log = logging.getLogger(__name__)
+# Human-in-the-loop via LangChain's HumanInTheLoopMiddleware, attached per
+# sub-agent: it gates ONLY the critical tools registered below; every other tool
+# runs autonomously. Several hitl tool calls in one turn (e.g. "start all
+# exploits") are batched into a SINGLE interrupt -> one approval card.
 
-# Agent Inbox interrupt contract. We raise a HumanInterrupt-shaped value and read
-# back a HumanResponse, which Agent Chat UI renders as an accept/respond/ignore
-# card. We use plain dicts rather than importing the TypedDicts.
-#  Schema: https://github.com/langchain-ai/agent-inbox
-#
-# What the operator may do with a controlled action. allow_edit stays off: these are
-# destructive / outward-facing calls, approve-or-reject is enough. Flip
-# allow_edit to True to let the operator tweak args before the call runs,
-# _interpret_response already applies the edited args, so it is a safe toggle.
-_HITL_CONFIG = {
-    "allow_accept": True,
-    "allow_respond": True,
-    "allow_edit": False,
-    "allow_ignore": True,
-}
+# Operators may approve or reject.
+_DECISIONS = ["approve", "reject"]
 
 
-def _interpret_response(response: Any) -> tuple[bool, str | None, dict | None]:
-    """Map an Agent Inbox HumanResponse to ``(approved, reason, edited_args)``.
+def _describe(summary, detail=None):
+    def _factory(tool_call: dict[str, Any], state: Any, runtime: Any) -> str:
+        line = summary(tool_call.get("args", {}))
+        return line + (detail(state) if detail else "")
 
-    Resume arrives as a list of HumanResponse (one per interrupt raised); we raise
-    exactly one, so we read the first element. Anything we do not recognise is
-    treated as a rejection, we never silently approve.
+    return _factory
+
+
+def _control(summary, detail=None) -> dict[str, Any]:
+    return {"allowed_decisions": _DECISIONS, "description": _describe(summary, detail)}
+
+
+def _clip(text: str, limit: int = 2000) -> str:
+    return text if len(text) <= limit else text[:limit] + "\n… (truncated)"
+
+
+def _last_tool_msg(state: Any, name: str):
+    for m in reversed(state.get("messages") or []):
+        if isinstance(m, ToolMessage) and m.name == name:
+            return m
+    return None
+
+
+def _last_tool_arg(state: Any, name: str, key: str):
+    for m in reversed(state.get("messages") or []):
+        for tc in getattr(m, "tool_calls", None) or []:
+            if tc.get("name") == name:
+                return (tc.get("args") or {}).get(key)
+    return None
+
+
+# approval-card summaries, one per critical tool
+
+def _create_rule(a: dict[str, Any]) -> str:
+    return (
+        f"Create rule '{a.get('name')}' on service '{a.get('service_id')}' "
+        f"with action='{a.get('action')}', expression: {a.get('expression')!r}"
+    )
+
+
+def _update_rule(a: dict[str, Any]) -> str:
+    return (
+        f"Update rule id='{a.get('rule_id')}' on service "
+        f"'{a.get('service_id')}' to action='{a.get('action')}', "
+        f"expression: {a.get('expression')!r}"
+    )
+
+
+def _deploy(a: dict[str, Any]) -> str:
+    return (
+        f"Deploy patch for service '{a.get('service')}', branch "
+        f"{a.get('branch', 'main')!r}, message: {a.get('message')!r}"
+    )
+
+
+def _rollback(a: dict[str, Any]) -> str:
+    return f"Rollback service '{a.get('service')}' to commit {a.get('commit_sha')!r}"
+
+
+def _start_exploit(a: dict[str, Any]) -> str:
+    return f"Launch exploit '{a.get('name')}' against ALL teams (real attack)"
+
+
+def _push_exploit(a: dict[str, Any]) -> str:
+    return f"Push exploit '{a.get('name')}' source to the farm, message: {a.get('message')!r}"
+
+
+def _deploy_detail(state: Any) -> str:
+    m = _last_tool_msg(state, "get_diff")
+    if m is None:
+        return "\n\n(no diff in transcript, review the stream)"
+    art = getattr(m, "artifact", None) or {}
+    diff = (art.get("structured_content") or {}).get("diff") if isinstance(art, dict) else None
+    diff = diff or (m.content if isinstance(m.content, str) else str(m.content))
+    return f"\n\n```diff\n{_clip(diff)}\n```"
+
+
+def _exploit_detail(state: Any) -> str:
+    src = _last_tool_arg(state, "write_exploit_file", "content")
+    return f"\n\n```python\n{_clip(src)}\n```" if src else "\n\n(no source in transcript, review the stream)"
+
+
+# per-agent middleware factories
+
+def traffic_hitl() -> HumanInTheLoopMiddleware:
+    """HITL Janus rule writes.
+
+    NOTE: HITL create_rule/update_rule for ANY action (alert included), not just
+    drop/both, the middleware keys on tool name, not args, and any live rule
+    write is worth an operator click.
     """
-    if isinstance(response, list):
-        response = response[0] if response else {}
-    if not isinstance(response, dict):
-        return False, "operator rejected", None
-
-    rtype = response.get("type")
-    if rtype == "accept":
-        return True, None, None
-    if rtype == "edit":
-        # Approved with edits: HumanResponse.args is an ActionRequest
-        # {"action": ..., "args": {...}}; run the tool with the new args.
-        request = response.get("args")
-        edited = request.get("args") if isinstance(request, dict) else None
-        return True, None, edited if isinstance(edited, dict) else None
-    if rtype == "response":
-        reason = response.get("args")
-        return (
-            False,
-            reason if isinstance(reason, str) and reason else "operator rejected",
-            None,
-        )
-    # "ignore" or anything unexpected
-    return False, "operator rejected", None
-
-
-def _wrap_with_hitl(
-    mcp_tool: BaseTool,
-    *,
-    description_suffix: str,
-    should_control: callable,
-    summary: callable,
-) -> BaseTool:
-    """Generic HITL wrapper.
-
-    Reuses the MCP tool's args_schema so the agent sees the same signature. When
-    ``should_control(args)`` is true the call pauses via an Agent Inbox interrupt
-    until the operator accepts (optionally with edited args) or rejects.
-    """
-
-    async def _controlled(**kwargs: Any) -> Any:
-        if should_control(kwargs):
-            response = interrupt([
-                {
-                    "action_request": {"action": mcp_tool.name, "args": kwargs},
-                    "config": _HITL_CONFIG,
-                    "description": summary(kwargs),
-                }
-            ])
-            approved, reason, edited = _interpret_response(response)
-            if not approved:
-                log.info("HITL rejected %s: %s", mcp_tool.name, reason)
-                return {"status": "rejected", "reason": reason, "payload": kwargs}
-            if edited:
-                log.info("HITL approved %s with edits", mcp_tool.name)
-                kwargs = edited
-            else:
-                log.info("HITL approved %s", mcp_tool.name)
-        return await mcp_tool.ainvoke(kwargs)
-
-    return StructuredTool.from_function(
-        coroutine=_controlled,
-        name=mcp_tool.name,
-        description=f"{mcp_tool.description}\n\n{description_suffix}",
-        args_schema=mcp_tool.args_schema,
+    return HumanInTheLoopMiddleware(
+        interrupt_on={
+            "create_rule": _control(_create_rule),
+            "update_rule": _control(_update_rule),
+        }
     )
 
 
-def wrap_rule_create(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval for create_rule when action is drop or both."""
-
-    def _should_control(kw: dict[str, Any]) -> bool:
-        return kw.get("action", "alert") in ("drop", "both")
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return (
-            f"Create rule '{kw.get('name')}' on service '{kw.get('service_id')}' "
-            f"with action='{kw.get('action')}' — expression: {kw.get('expression')!r}"
-        )
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: when action='drop' or 'both', the call is paused and the "
-            "operator must approve before the rule is created in Janus. "
-            "action='alert' is applied immediately without approval."
-        ),
-        should_control=_should_control,
-        summary=_summary,
+def patch_hitl() -> HumanInTheLoopMiddleware:
+    """Gate code deploy / rollback to the competition VM."""
+    return HumanInTheLoopMiddleware(
+        interrupt_on={
+            "deploy": _control(_deploy, _deploy_detail),
+            "rollback": _control(_rollback),
+        }
     )
 
 
-def wrap_rule_update(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval for update_rule when the new action is drop or both.
-
-    We always require approval for updates that result in a drop, even if the
-    rule was previously a drop, the operator should re-confirm any change to
-    live blocking behavior.
-    """
-
-    def _should_control(kw: dict[str, Any]) -> bool:
-        return kw.get("action") in ("drop", "both")
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return (
-            f"Update rule id='{kw.get('rule_id')}' on service "
-            f"'{kw.get('service_id')}' to action='{kw.get('action')}' — "
-            f"expression: {kw.get('expression')!r}"
-        )
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: updates that set action='drop' or 'both' are paused until "
-            "the operator approves. Updates that keep / set action='alert' "
-            "are applied immediately."
-        ),
-        should_control=_should_control,
-        summary=_summary,
+def exploit_hitl() -> HumanInTheLoopMiddleware:
+    """Gate the offensive / outward-facing exploit actions."""
+    return HumanInTheLoopMiddleware(
+        interrupt_on={
+            "start_exploit": _control(_start_exploit),
+            "push_exploit": _control(_push_exploit, _exploit_detail),
+        }
     )
-
-
-def wrap_patch_deploy(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval for any patch deploy. Always requires approval."""
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return (
-            f"Deploy patch for service '{kw.get('service')}', branch "
-            f"{kw.get('branch', 'main')!r}, message: {kw.get('message')!r}"
-        )
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: deploying a patch pushes code to the competition VM and "
-            "triggers a service rebuild, always paused for operator approval."
-        ),
-        should_control=lambda _kw: True,
-        summary=_summary,
-    )
-
-
-def wrap_patch_rollback(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval for rollback, same reasoning as deploy."""
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return (
-            f"Rollback service '{kw.get('service')}' to commit "
-            f"{kw.get('commit_sha')!r}"
-        )
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: a rollback rewinds the deployed code on the VM, always "
-            "paused for operator approval."
-        ),
-        should_control=lambda _kw: True,
-        summary=_summary,
-    )
-
-
-def wrap_exploit_start(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval before launching an exploit against all teams."""
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return f"Launch exploit '{kw.get('name')}' against ALL teams (real attack)"
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: starting an exploit attacks every team's service and submits "
-            "flags, always paused for operator approval. Use test_exploit "
-            "(default target host) first; it is NOT gated."
-        ),
-        should_control=lambda _kw: True,
-        summary=_summary,
-    )
-
-
-def wrap_exploit_push(mcp_tool: BaseTool) -> BaseTool:
-    """Require operator approval before uploading exploit source to the farm."""
-
-    def _summary(kw: dict[str, Any]) -> str:
-        return f"Push exploit '{kw.get('name')}' source to the farm, message: {kw.get('message')!r}"
-
-    return _wrap_with_hitl(
-        mcp_tool,
-        description_suffix=(
-            "HITL: pushing uploads the exploit source to the shared farm where "
-            "workers pick it up, paused for operator approval."
-        ),
-        should_control=lambda _kw: True,
-        summary=_summary,
-    )
-
-
-_DEFAULT_WRAPPERS: dict[str, callable] = {
-    "create_rule": wrap_rule_create,
-    "update_rule": wrap_rule_update,
-    "deploy": wrap_patch_deploy,
-    "rollback": wrap_patch_rollback,
-    "start_exploit": wrap_exploit_start,
-    "push_exploit": wrap_exploit_push,
-}
-
-
-def apply_hitl(tools: list[BaseTool]) -> list[BaseTool]:
-    """Return a new list of tools with HITL wrappers applied by name."""
-    out: list[BaseTool] = []
-    for t in tools:
-        wrapper = _DEFAULT_WRAPPERS.get(t.name)
-        out.append(wrapper(t) if wrapper else t)
-    return out

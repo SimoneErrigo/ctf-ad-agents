@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
-from src.tools.hitl import apply_hitl
 from src.tools.mcp_client import MCPToolRegistry, build_patcher_registry
 
 
@@ -14,8 +13,9 @@ async def get_patch_tools(registry: MCPToolRegistry | None = None) -> list[BaseT
     endpoint and no per-agent views, so its tools live under one `patcher` key
     built by `build_patcher_registry()`.
 
-    `deploy` / `rollback` are wrapped with HITL so any code push to the
-    competition VM pauses for operator approval before it runs.
+    HITL for `deploy` / `rollback` is applied by the agent's
+    HumanInTheLoopMiddleware (`patch_hitl`), not here, so the tools are
+    returned raw.
 
     Pass a pre-built `registry` when the application already loaded it at
     startup (recommended, avoids re-fetching tools for each agent). When
@@ -31,4 +31,4 @@ async def get_patch_tools(registry: MCPToolRegistry | None = None) -> list[BaseT
     # turn on the same THREAD_ID fails with a Bedrock contract error.
     for t in raw:
         t.handle_tool_error = True
-    return apply_hitl(raw)
+    return raw

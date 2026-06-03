@@ -17,6 +17,7 @@ from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langchain_aws.middleware import BedrockPromptCachingMiddleware
 
+from src.tools.hitl import patch_hitl
 from src.tools.mcp_client import MCPToolRegistry
 from src.tools.patch_agent_tools import get_patch_tools
 
@@ -31,9 +32,9 @@ SYSTEM_PROMPT = (
     "Your job: given a vulnerability description or attack report, produce a "
     "MINIMAL source-level patch on the vulnerable service and (if the operator "
     "approves) deploy it to the competition VM.\n\n"
-    "TOOLING: you only have the patcher MCP. The Janus traffic tools are not "
-    "yours; if you need traffic evidence to understand the bug, the orchestrator "
-    "will pass it to you in the prompt. Available actions:\n"
+    "TOOLING: you only have the patcher MCP. The Janus traffic tools are not yours; "
+    "work from the source. Any traffic/attack context reaches you only if the operator put it in "
+    "your task, you cannot query Janus yourself. Available actions:\n"
     "  - list_workspace_services / resolve_service(service) / ensure_service_repo(service)\n"
     "  - list_files(service, path) / read_file(service, path)\n"
     "  - git_status / git_log / get_diff(service, ref=None|'origin/main')\n"
@@ -61,8 +62,9 @@ SYSTEM_PROMPT = (
     "Then call get_diff to inspect the result. If the diff is wrong, "
     "discard_changes and try again. A good patch is typically <30 lines.\n"
     "4. PROPOSE DEPLOY. Once the diff looks right, summarize the change and call "
-    "deploy(service). This will pause for operator approval. If status='rejected', "
-    "report the operator's decision and stop, do NOT redeploy or work around. "
+    "deploy(service). This will pause for operator approval. If the operator rejects "
+    "it (the tool comes back with an error noting the rejection), report the decision "
+    "and stop, do NOT redeploy or work around. "
     "If deploy returns ok=false, status=error, or mentions a hook/deploy "
     "failure, report deployment FAILED. Do not infer success from a remote "
     "branch update; only report live/deployed when deploy returns deployed=true "
@@ -90,7 +92,8 @@ SYSTEM_PROMPT = (
     "OUTPUT:\n"
     "End with a concise final report: which service, which files touched, the "
     "commit SHA, whether the deploy was approved/rejected/pending, and one "
-    "sentence on why the fix closes the bug."
+    "sentence on why the fix closes the bug. State this status IN THE TEXT: the "
+    "report is the only thing relayed to the supervisor, your tool results are not."
 )
 
 
@@ -131,11 +134,13 @@ async def build_patch_agent(registry: MCPToolRegistry | None = None):
         model=_build_llm(),
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        name="patch",
         middleware=[
             BedrockPromptCachingMiddleware(
                 ttl="5m",
                 min_messages_to_cache=0,
                 unsupported_model_behavior="raise",
-            )
+            ),
+            patch_hitl(),
         ],
     )

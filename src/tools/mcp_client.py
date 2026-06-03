@@ -8,6 +8,7 @@ To add a new agent:
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 
@@ -15,6 +16,57 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 log = logging.getLogger(__name__)
+
+
+def _collapse_text_blocks(content: object) -> object:
+    """Join a list of MCP text content blocks into a single string.
+
+    `langchain_mcp_adapters` returns ToolMessage content as a list of content
+    blocks (e.g. ``[{"type": "text", "text": ...}]``). The Agent Chat UI renders
+    non-string content as ``[object Object]``, so for the common text-only case we
+    flatten it to a plain string. Any non-text block (image/file) means we keep
+    the original list so those still render through the UI's block handling.
+    """
+    if not isinstance(content, list):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+        else:
+            return content
+    return "\n".join(parts)
+
+
+def _stringify_tool_content(tool: BaseTool) -> BaseTool:
+    """Wrap a content_and_artifact MCP tool so its ToolMessage content is a plain
+    string for the UI, leaving the structured `artifact` untouched.
+
+    Only the async ``coroutine`` is wrapped (MCP tools are async-only). We use
+    ``functools.wraps`` so ``inspect.signature`` still resolves to the original;
+    StructuredTool introspects it for ``callbacks``/config params at call time.
+    """
+    original = tool.coroutine
+    if original is None:
+        return tool
+
+    @functools.wraps(original)
+    async def wrapped(*args: object, **kwargs: object) -> object:
+        result = await original(*args, **kwargs)
+        # content_and_artifact tools return (content, artifact); a handoff tool
+        # may return a Command/ToolMessage directly, leave those untouched.
+        if isinstance(result, tuple) and len(result) == 2:
+            content, artifact = result
+            return _collapse_text_blocks(content), artifact
+        return result
+
+    tool.coroutine = wrapped
+    return tool
+
+
+def _normalize_tools(tools: list[BaseTool]) -> list[BaseTool]:
+    """Apply the UI-friendly content normalization to every loaded MCP tool."""
+    return [_stringify_tool_content(t) for t in tools]
 
 # Each server is configured by a single <SERVICE>_MCP_BASE_URL (host:port, no
 # path); the per-endpoint path is appended below.
@@ -84,7 +136,7 @@ async def build_registry() -> MCPToolRegistry:
         client = MultiServerMCPClient({
             agent: {"url": url, "transport": "streamable_http"},
         })
-        tools = await client.get_tools()
+        tools = _normalize_tools(await client.get_tools())
         by_agent[agent] = tools
         log.info(
             "MCP[%s] loaded %d tools from %s: %s",
@@ -108,7 +160,7 @@ async def build_patcher_registry() -> MCPToolRegistry:
     client = MultiServerMCPClient({
         "patcher": {"url": PATCHER_MCP_URL, "transport": "streamable_http"},
     })
-    tools = await client.get_tools()
+    tools = _normalize_tools(await client.get_tools())
     log.info(
         "MCP[patcher] loaded %d tools from %s: %s",
         len(tools),
@@ -121,7 +173,7 @@ async def build_patcher_registry() -> MCPToolRegistry:
 async def _load_single(agent: str, url: str) -> MCPToolRegistry:
     """Load one MCP endpoint into a one-entry registry keyed by `agent`."""
     client = MultiServerMCPClient({agent: {"url": url, "transport": "streamable_http"}})
-    tools = await client.get_tools()
+    tools = _normalize_tools(await client.get_tools())
     log.info("MCP[%s] loaded %d tools from %s: %s", agent, len(tools), url, [t.name for t in tools])
     return MCPToolRegistry({agent: tools})
 
