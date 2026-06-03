@@ -1,39 +1,48 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import ToolMessage
 
 # Human-in-the-loop via LangChain's HumanInTheLoopMiddleware, attached per
-# sub-agent. It controls ONLY the critical tools registered below; every other tool
-# the agent has runs autonomously. When the model emits several hitl tool calls
-# in one turn (e.g. "start all exploits"), the middleware batches them into a
-# SINGLE interrupt carrying every action_request, which Agent Chat UI renders as
-# one approval card and resumes with one decision per action.
-#
-# The interrupt() the middleware raises bubbles up (GraphBubbleUp) through the
-# `security_analysis` tool wrapper to the conversational checkpointer just like a
-# hand-rolled interrupt did, so HITL still pauses/resumes the whole run. See
-# src/graph.py (the GraphBubbleUp re-raise) and [[hitl-interrupt-propagation]].
+# sub-agent: it gates ONLY the critical tools registered below; every other tool
+# runs autonomously. Several hitl tool calls in one turn (e.g. "start all
+# exploits") are batched into a SINGLE interrupt -> one approval card.
 
 # Operators may approve or reject.
 _DECISIONS = ["approve", "reject"]
 
 
-def _describe(summary: Callable[[dict[str, Any]], str]):
-    """Adapt a ``summary(args) -> str`` into the middleware's description
-    callable signature ``(tool_call, state, runtime) -> str``. The returned
-    string is the human-readable line shown on the approval card."""
-
+def _describe(summary, detail=None):
     def _factory(tool_call: dict[str, Any], state: Any, runtime: Any) -> str:
-        return summary(tool_call.get("args", {}))
+        line = summary(tool_call.get("args", {}))
+        return line + (detail(state) if detail else "")
 
     return _factory
 
 
-def _control(summary: Callable[[dict[str, Any]], str]) -> dict[str, Any]:
-    """InterruptOnConfig (plain dict) for one critical tool."""
-    return {"allowed_decisions": _DECISIONS, "description": _describe(summary)}
+def _control(summary, detail=None) -> dict[str, Any]:
+    return {"allowed_decisions": _DECISIONS, "description": _describe(summary, detail)}
+
+
+def _clip(text: str, limit: int = 2000) -> str:
+    return text if len(text) <= limit else text[:limit] + "\n… (truncated)"
+
+
+def _last_tool_msg(state: Any, name: str):
+    for m in reversed(state.get("messages") or []):
+        if isinstance(m, ToolMessage) and m.name == name:
+            return m
+    return None
+
+
+def _last_tool_arg(state: Any, name: str, key: str):
+    for m in reversed(state.get("messages") or []):
+        for tc in getattr(m, "tool_calls", None) or []:
+            if tc.get("name") == name:
+                return (tc.get("args") or {}).get(key)
+    return None
 
 
 # approval-card summaries, one per critical tool
@@ -72,6 +81,21 @@ def _push_exploit(a: dict[str, Any]) -> str:
     return f"Push exploit '{a.get('name')}' source to the farm, message: {a.get('message')!r}"
 
 
+def _deploy_detail(state: Any) -> str:
+    m = _last_tool_msg(state, "get_diff")
+    if m is None:
+        return "\n\n(no diff in transcript, review the stream)"
+    art = getattr(m, "artifact", None) or {}
+    diff = (art.get("structured_content") or {}).get("diff") if isinstance(art, dict) else None
+    diff = diff or (m.content if isinstance(m.content, str) else str(m.content))
+    return f"\n\n```diff\n{_clip(diff)}\n```"
+
+
+def _exploit_detail(state: Any) -> str:
+    src = _last_tool_arg(state, "write_exploit_file", "content")
+    return f"\n\n```python\n{_clip(src)}\n```" if src else "\n\n(no source in transcript, review the stream)"
+
+
 # per-agent middleware factories
 
 def traffic_hitl() -> HumanInTheLoopMiddleware:
@@ -93,7 +117,7 @@ def patch_hitl() -> HumanInTheLoopMiddleware:
     """Gate code deploy / rollback to the competition VM."""
     return HumanInTheLoopMiddleware(
         interrupt_on={
-            "deploy": _control(_deploy),
+            "deploy": _control(_deploy, _deploy_detail),
             "rollback": _control(_rollback),
         }
     )
@@ -104,6 +128,6 @@ def exploit_hitl() -> HumanInTheLoopMiddleware:
     return HumanInTheLoopMiddleware(
         interrupt_on={
             "start_exploit": _control(_start_exploit),
-            "push_exploit": _control(_push_exploit),
+            "push_exploit": _control(_push_exploit, _exploit_detail),
         }
     )
