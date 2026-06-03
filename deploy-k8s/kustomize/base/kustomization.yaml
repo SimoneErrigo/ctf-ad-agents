@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# All the namespaced resources of this base end up in ctf-ad-agents.
+namespace: ctf-ad-agents
+
+resources:
+  - namespace.yaml
+
+# stable names (endpoints, app-secrets) instead of .../<hash>: so that Helm 
+# and the manifests in the future can reference them without surprises.
+generatorOptions:
+  disableNameSuffixHash: true
+
+# endpoints.env -> ConfigMap "endpoints" (IP LAN + URL in-cluster dei MCP)
+configMapGenerator:
+  - name: endpoints
+    envs:
+      - config/endpoints.env
+
+# secrets.env -> Secret "app-secrets" (passwords/keys). Gitignored file.
+secretGenerator:
+  - name: app-secrets
+    envs:
+      - config/secrets.env

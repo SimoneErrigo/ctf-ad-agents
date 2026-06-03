@@ -1,0 +1,61 @@
+# Single-replica Postgres. StatefulSet (not Deployment) because it owns a PVC (PersistentVolumeClaim) 
+# and a stable identity: the persistence layer for the Agent Server (threads,
+# checkpoints, runs) -> this is what lets another worker resume from the last
+# checkpoint after a crash.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres   # binds to the headless Service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template: # Pod template
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          # DB + USER from ConfigMap, PASSWORD from the shared Secret.
+          envFrom: # loads env vars from ConfigMap
+            - configMapRef:
+                name: postgres-config
+          env: # take secret from app-secrets
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: POSTGRES_PASSWORD
+            # Keep data in a subdir of the mount (avoids init clashing with the
+            # volume root on some provisioners).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe: # is pgsql ready?
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe: # is pgsql alive? 
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+  # Auto-creates PVC data-postgres-0 from the default StorageClass (minikube).
+  volumeClaimTemplates: # StatefulSet automatically creates a PVC, which is a persistent disk request
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

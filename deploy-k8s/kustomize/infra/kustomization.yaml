@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Stateful infra tier: Postgres (durable) + Redis (ephemeral). Consumes the
+# app-secrets Secret created by ../base, so apply base first.
+namespace: ctf-ad-agents
+
+resources:
+  - postgres-config.yaml
+  - postgres-service.yaml
+  - postgres-statefulset.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
