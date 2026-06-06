@@ -1,0 +1,141 @@
+name: Build & push images
+
+# On every merge to main, rebuild only the images whose source changed and
+# push them to GHCR (tags: `dev` + `sha-<shortsha>`). The local minikube
+# cluster is NOT reachable from GitHub, so the rollout is done locally
+# (see deploy-k8s/README.md / the rollout helper script).
+on:
+  push:
+    branches: [main]
+
+# Don't cancel an in-flight push if another commit lands; let it finish.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      agent_server: ${{ steps.filter.outputs.agent_server }}
+      ui: ${{ steps.filter.outputs.ui }}
+      janus: ${{ steps.filter.outputs.janus }}
+      exploiter: ${{ steps.filter.outputs.exploiter }}
+      patcher: ${{ steps.filter.outputs.patcher }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            agent_server:
+              - 'src/agents/**'
+              - 'src/tools/**'
+              - 'src/state/**'
+              - 'src/graph.py'
+              - 'langgraph.json'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/**'
+            ui:
+              - 'agent-chat-ui/**'
+              - 'deploy-k8s/ui/Dockerfile'
+              - 'deploy-k8s/ui/Dockerfile.dockerignore'
+              - '.github/workflows/**'
+            janus:
+              - 'src/janus/**'
+              - '.github/workflows/**'
+            exploiter:
+              - 'src/exploiter/**'
+              - '.github/workflows/**'
+            patcher:
+              - 'src/patcher/**'
+              - '.github/workflows/**'
+
+  ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      image: agent-chat-ui
+      context: agent-chat-ui
+      dockerfile: deploy-k8s/ui/Dockerfile
+
+  janus:
+    needs: changes
+    if: needs.changes.outputs.janus == 'true'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      image: janus-mcp
+      context: src/janus
+      dockerfile: src/janus/Dockerfile
+
+  exploiter:
+    needs: changes
+    if: needs.changes.outputs.exploiter == 'true'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      image: exploiter-mcp
+      context: src/exploiter
+      dockerfile: src/exploiter/Dockerfile
+
+  patcher:
+    needs: changes
+    if: needs.changes.outputs.patcher == 'true'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      image: patcher-mcp
+      context: src/patcher
+      dockerfile: src/patcher/Dockerfile
+
+  # The agent-server image is generated from langgraph.json via the LangGraph
+  # CLI, so it can't go through the generic reusable build.
+  agent-server:
+    needs: changes
+    if: needs.changes.outputs.agent_server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Generate Dockerfile from langgraph.json
+        run: |
+          # langgraph reads "env": ".env" from the config; it's gitignored,
+          # so provide an empty one for the build (secrets are injected at
+          # runtime via the app-secrets Secret, never baked into the image).
+          touch .env
+          uvx --from langgraph-cli langgraph dockerfile -c langgraph.json Dockerfile.langgraph
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/agent-server
+          tags: |
+            type=raw,value=dev
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.langgraph
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agent-server
+          cache-to: type=gha,mode=max,scope=agent-server
