@@ -15,7 +15,7 @@ data:
   PATCHER_GIT_USER_EMAIL: patch-agent@ctf-ad-agents.local
   PATCHER_GIT_SSH_STRICT_HOST_CHECK: "false"
   VM_SSH_KEY_PATH: /root/.ssh/id_ed25519 # the mounted Secret file
-  VM_GIT_REMOTE_ROOT: /home/cc_crew/git # bare-repo root on the VM (edit per VM)
+  VM_GIT_REMOTE_ROOT: /Users/errigosimone/Simone_mac/ad-local # bare-repo root on the VM (edit per VM)
   PATCHER_MAX_FILE_BYTES: "262144"
   PATCHER_MAX_DIFF_BYTES: "524288"
   PATCHER_MAX_LIST_ENTRIES: "500"

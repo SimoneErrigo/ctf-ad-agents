@@ -97,6 +97,8 @@ jobs:
           uvx --python 3.13 --from "langgraph-cli==0.4.27" \
             langgraph dockerfile -c langgraph.json Dockerfile.langgraph
 
+      - uses: docker/setup-qemu-action@v3
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -120,6 +122,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.langgraph
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
