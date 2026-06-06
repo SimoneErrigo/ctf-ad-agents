@@ -1,0 +1,14 @@
+# Clients reach Redis at redis:6379 inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379 # host port
+      targetPort: 6379 # container port

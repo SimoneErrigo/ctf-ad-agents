@@ -1,0 +1,18 @@
+# Headless Service (clusterIP: None) is the StatefulSet-idiomatic pairing; with a
+# single replica it still resolves "postgres" -> the pod IP, so clients connect to
+# postgres:5432. In simple words -> does not create a unique virtual IP for the Service,
+# when someone searches for postgres, Kubernetes responds directly with the IP of the PostgreSQL Pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres # this Service targets Pods that have this label, so in the StatefulSet we will label the Pod template with app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

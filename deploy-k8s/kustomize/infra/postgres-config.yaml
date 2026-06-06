@@ -1,0 +1,11 @@
+# Non-secret Postgres coordinates. The password lives in the app-secrets Secret.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+data:
+  POSTGRES_DB: ctf_ad_agents
+  POSTGRES_USER: ctf_ad_agents
+  POSTGRES_HOST: postgres   # in-cluster Service DNS name
+  POSTGRES_PORT: "5432"
