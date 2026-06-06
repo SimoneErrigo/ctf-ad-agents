@@ -45,7 +45,8 @@ def build_synthesis_llm() -> ChatBedrockConverse:
 CLASSIFY_PROMPT = """Route the operator request to the smallest set of agents.
 
 Agents:
-- traffic: recent Janus traffic reports and Janus alert/drop rules.
+- traffic: recent Janus traffic reports, Janus service inventory/status (which
+  services are up/proxied and their ports), and Janus alert/drop rules.
 - patch: source fix, deploy, rollback.
 - exploit: write/test/push/start/STOP a Python exploit via xfarm, and report
   which exploits are currently running.
@@ -64,7 +65,9 @@ Hard routing rules:
   exploit agent enumerates them and acts on each.
 - If the user names an existing exploit and asks to start/run it, tell exploit
   to use that exact existing name and not rewrite/replace files unless asked to fix.
-- Include traffic only for a standalone traffic report or Janus rule/block/alert.
+- Include traffic only for a standalone traffic report, a Janus rule/block/alert,
+  or a Janus service inventory/status question (which services are up/proxied,
+  list the services, their ports). This is read from Janus via list_services.
 - Include patch only for fix/patch/deploy/rollback.
 - Preserve scope in every sub-question: service name, any named bug/class phrase,
   source vs traffic wording, and requested actions.
@@ -96,6 +99,8 @@ Sub-question shape:
   running exploits" as ONE task; the agent lists them and acts on each.
 - traffic: "Inspect only recent traffic for service X; report endpoint/parameter/
   payload evidence, or create the requested Janus rule via HITL."
+- traffic (inventory): "List the services Janus currently proxies (name, id, ports,
+  enabled) via list_services and report which are up." No traffic packet reads.
 - patch: "Patch ONLY <named bug/class/path if any> in service X with a minimal source fix;
   deploy through HITL if requested."
 """

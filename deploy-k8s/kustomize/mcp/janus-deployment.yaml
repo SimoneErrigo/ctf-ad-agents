@@ -1,0 +1,46 @@
+# janus-mcp is stateless (real state lives in the Janus proxy), so a plain
+# Deployment, no PVC. It reaches the Janus proxy out on the LAN via JANUS_URL.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: janus-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: janus-mcp
+  template:
+    metadata:
+      labels:
+        app: janus-mcp
+    spec:
+      containers:
+        - name: janus-mcp
+          image: ghcr.io/simoneerrigo/janus-mcp:dev
+          imagePullPolicy: IfNotPresent # use the locally-loaded image if present
+          ports:
+            - name: mcp
+              containerPort: 8765
+          envFrom:
+            - configMapRef:
+                name: janus-config # tunables
+          env:
+            - name: JANUS_URL # LAN address, from shared endpoints
+              valueFrom:
+                configMapKeyRef:
+                  name: endpoints
+                  key: JANUS_URL
+            - name: JANUS_PASSWORD # required, from shared secret
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JANUS_PASSWORD
+          # MCP streamable-http has no plain health route, so probe the TCP port.
+          readinessProbe:
+            tcpSocket: { port: 8765 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8765 }
+            initialDelaySeconds: 15
+            periodSeconds: 20

@@ -6,6 +6,7 @@ namespace: ctf-ad-agents
 
 resources:
   - namespace.yaml
+  - agent-config.yaml
 
 # stable names (endpoints, app-secrets) instead of .../<hash>: so that Helm 
 # and the manifests in the future can reference them without surprises.

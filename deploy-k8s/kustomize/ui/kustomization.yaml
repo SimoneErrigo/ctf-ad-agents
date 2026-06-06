@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# UI tier: Agent Chat UI + its Ingress (the only externally-exposed component).
+namespace: ctf-ad-agents
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml

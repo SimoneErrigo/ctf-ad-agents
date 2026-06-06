@@ -1,0 +1,16 @@
+# Janus MCP tunables (all optional, these mirror the .env.example defaults).
+# The only REQUIRED setting, JANUS_PASSWORD, comes from app-secrets; JANUS_URL
+# (the LAN address of the Janus proxy) comes from the shared endpoints ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: janus-config
+data:
+  JANUS_DISPLAY_NAME: mcp-agent
+  JANUS_TIMEOUT: "20"
+  JANUS_MCP_HOST: 0.0.0.0
+  JANUS_MCP_PORT: "8765"
+  JANUS_MAX_LIMIT: "1000"
+  JANUS_SUMMARY_MAX_LIMIT: "50"
+  JANUS_BODY_MAX_BYTES: "8192"
+  JANUS_MAX_FLOW_PACKETS: "20"

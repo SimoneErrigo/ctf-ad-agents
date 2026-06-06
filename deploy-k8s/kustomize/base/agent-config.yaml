@@ -1,0 +1,15 @@
+# Non-secret agent-server config: AWS region + per-agent Bedrock model ids.
+# The agent-server (Helm) injects these as env via extraEnv. AWS credentials stay
+# in the app-secrets Secret, not here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  REGION_NAME: us-east-1
+  TRAFFIC_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
+  PATCH_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
+  EXPLOIT_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
+  ROUTER_AGENT_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  CHAT_AGENT_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  SYNTHESIS_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0

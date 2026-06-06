@@ -98,7 +98,7 @@ Stage & commit in the local workspace, no push:
 
 | Tool                  | What it does                                                                |
 | --------------------- | --------------------------------------------------------------------------- |
-| `ensure_service_repo` | Clone/init the service repo from the VM if it isn't in the workspace yet.   |
+| `ensure_service_repo` | Clone the service repo from the VM; re-clones a stale empty workspace, fails with ok=false if the bare repo isn't seeded. |
 | `write_files`         | Write and commit a minimal set of `{path, content}` files. Does not push.   |
 | `replace_text`        | Replace an exact snippet and commit. Preferred for small patches.           |
 | `apply_patch`         | Apply a compact unified diff and commit.                                    |

@@ -1,0 +1,15 @@
+# Resolves to http://janus-mcp:8765 in-cluster,  matches JANUS_MCP_BASE_URL in the
+# endpoints ConfigMap, which the agent-server will use to load the Janus tools.
+apiVersion: v1
+kind: Service
+metadata:
+  name: janus-mcp
+  labels:
+    app: janus-mcp
+spec:
+  selector:
+    app: janus-mcp
+  ports:
+    - name: mcp
+      port: 8765
+      targetPort: 8765

@@ -1,0 +1,23 @@
+# The ONLY public door to the system: just the UI. Nginx (buffering off, long timeouts) 
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-chat-ui
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: chat.ctf.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-chat-ui
+                port:
+                  number: 3000
