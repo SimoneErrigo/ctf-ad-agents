@@ -1,0 +1,23 @@
+# patcher-mcp tunables. Required setting VM_IP (+ VM_SSH_USER/PORT) come from the
+# shared endpoints ConfigMap; the SSH private key comes from the patcher-ssh
+# Secret (created by you, mounted as a file).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: patcher-config
+data:
+  PATCHER_WORKSPACE_ROOT: /var/lib/patcher/workspace # the PVC mount
+  PATCHER_MCP_HOST: 0.0.0.0
+  PATCHER_MCP_PORT: "8766"
+  PATCHER_MCP_PATH: /mcp
+  PATCHER_DEFAULT_BRANCH: main
+  PATCHER_GIT_USER_NAME: patch-agent
+  PATCHER_GIT_USER_EMAIL: patch-agent@ctf-ad-agents.local
+  PATCHER_GIT_SSH_STRICT_HOST_CHECK: "false"
+  VM_SSH_KEY_PATH: /root/.ssh/id_ed25519 # the mounted Secret file
+  VM_GIT_REMOTE_ROOT: /home/cc_crew/git # bare-repo root on the VM (edit per VM)
+  PATCHER_MAX_FILE_BYTES: "262144"
+  PATCHER_MAX_DIFF_BYTES: "524288"
+  PATCHER_MAX_LIST_ENTRIES: "500"
+  PATCHER_SERVICE_ALIASES: '{"ezblog":"easyblog","NotABook":"notabook","pols":"polls","bg":"buggy","soh-nginx":"seaofhackerz","soh-backend":"seaofhackerz","SOH1":"seaofhackerz","SOH2":"seaofhackerz","SeaOfHackerz":"seaofhackerz","auth_service":"cyberuni","examnotes":"cyberuni","CyberUni":"cyberuni","CyberUni2":"cyberuni"}'
+  PATCHER_DEPLOY_WORKTREES:

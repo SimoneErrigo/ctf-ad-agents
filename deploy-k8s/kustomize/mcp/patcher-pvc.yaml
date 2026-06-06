@@ -1,0 +1,10 @@
+# Durable workspace: one git working tree per service.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: patcher-workspace
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

@@ -3,5 +3,6 @@
   "graphs": {
     "conversational": "./src/graph.py:make_graph"
   },
-  "env": ".env"
+  "env": ".env",
+  "python_version": "3.13"
 }

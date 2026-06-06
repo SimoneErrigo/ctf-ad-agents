@@ -1,0 +1,14 @@
+# Resolves to http://patcher-mcp:8766 in-cluster, matches PATCHER_MCP_BASE_URL.
+apiVersion: v1
+kind: Service
+metadata:
+  name: patcher-mcp
+  labels:
+    app: patcher-mcp
+spec:
+  selector:
+    app: patcher-mcp
+  ports:
+    - name: mcp
+      port: 8766
+      targetPort: 8766

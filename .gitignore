@@ -151,6 +151,12 @@ activemq-data/
 .env
 .envrc
 
+# deploy-k8s: config/secret
+deploy-k8s/**/*.env
+!deploy-k8s/**/*.env.example
+deploy-k8s/helm/**/values.yaml
+!deploy-k8s/helm/**/values.yaml.example
+
 .exploitfarm/
 .venv
 env/

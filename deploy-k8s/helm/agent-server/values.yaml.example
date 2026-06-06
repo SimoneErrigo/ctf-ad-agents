@@ -1,0 +1,64 @@
+# Values for the langchain/langgraph-cloud chart
+# Copy to values.yaml and set the real Postgres password in the connection URL.
+# (values.yaml is gitignored; this .example is committed.)
+
+# Our graph image, built with `langgraph build`.
+images:
+  apiServerImage:
+    repository: ghcr.io/simoneerrigo/agent-server
+    tag: dev
+    pullPolicy: IfNotPresent
+
+# Reuse OUR Postgres/Redis (deployed via kustomize), not the chart's bundled ones (if any).
+postgres:
+  external:
+    enabled: true
+    connectionUrl: "postgres://ctf_ad_agents:<POSTGRES_PASSWORD>@postgres:5432/ctf_ad_agents?sslmode=disable"
+redis:
+  external:
+    enabled: true
+    connectionUrl: "redis://redis:6379"
+
+# LangSmith api_key (+ empty license = Lite). Reuse the shared app-secrets Secret,
+# which now carries the chart's expected keys: api_key + langgraph_cloud_license_key.
+config:
+  existingSecretName: "app-secrets"
+
+apiServer:
+  service:
+    type: ClusterIP          # the UI proxies to it in Phase 6; no LoadBalancer locally
+    httpPort: 8000
+  deployment:
+    extraEnv:
+      # --- AWS Bedrock (from the shared app-secrets Secret) ---
+      - name: AWS_ACCESS_KEY_ID
+        valueFrom: { secretKeyRef: { name: app-secrets, key: AWS_ACCESS_KEY_ID } }
+      - name: AWS_SECRET_ACCESS_KEY
+        valueFrom: { secretKeyRef: { name: app-secrets, key: AWS_SECRET_ACCESS_KEY } }
+      # --- Region + per-agent model ids (from agent-config ConfigMap) ---
+      - name: REGION_NAME
+        valueFrom: { configMapKeyRef: { name: agent-config, key: REGION_NAME } }
+      - name: TRAFFIC_AGENT_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: TRAFFIC_AGENT_MODEL } }
+      - name: PATCH_AGENT_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: PATCH_AGENT_MODEL } }
+      - name: EXPLOIT_AGENT_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: EXPLOIT_AGENT_MODEL } }
+      - name: ROUTER_AGENT_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: ROUTER_AGENT_MODEL } }
+      - name: CHAT_AGENT_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: CHAT_AGENT_MODEL } }
+      - name: SYNTHESIS_MODEL
+        valueFrom: { configMapKeyRef: { name: agent-config, key: SYNTHESIS_MODEL } }
+      # --- MCP base URLs (from the endpoints ConfigMap) ---
+      - name: JANUS_MCP_BASE_URL
+        valueFrom: { configMapKeyRef: { name: endpoints, key: JANUS_MCP_BASE_URL } }
+      - name: PATCHER_MCP_BASE_URL
+        valueFrom: { configMapKeyRef: { name: endpoints, key: PATCHER_MCP_BASE_URL } }
+      - name: EXPLOITER_MCP_BASE_URL
+        valueFrom: { configMapKeyRef: { name: endpoints, key: EXPLOITER_MCP_BASE_URL } }
+      # --- LangSmith tracing (optional) ---
+      - name: LANGSMITH_TRACING
+        value: "true"
+      - name: LANGSMITH_PROJECT
+        value: "ctf-ad-agents"

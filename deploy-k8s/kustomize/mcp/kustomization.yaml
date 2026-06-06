@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# MCP tier. Consumes app-secrets + endpoints from ../base, so apply base first.
+
+namespace: ctf-ad-agents
+
+resources:
+  - janus-config.yaml
+  - janus-service.yaml
+  - janus-deployment.yaml
+  - patcher-config.yaml
+  - patcher-pvc.yaml
+  - patcher-service.yaml
+  - patcher-deployment.yaml
+  - exploiter-config.yaml
+  - exploiter-pvc.yaml
+  - exploiter-service.yaml
+  - exploiter-deployment.yaml

@@ -1,0 +1,40 @@
+# Agent Chat UI (Next.js). Stateless -> plain Deployment. The browser talks only to
+# this UI; the UI proxies to the INTERNAL agent-server via its /api passthrough,
+# so the server never needs to be exposed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-chat-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-chat-ui
+  template:
+    metadata:
+      labels:
+        app: agent-chat-ui
+    spec:
+      containers:
+        - name: agent-chat-ui
+          image: ghcr.io/simoneerrigo/agent-chat-ui:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: LANGGRAPH_API_URL
+              value: http://agent-server-langgraph-cloud-api-server:8000
+            - name: LANGSMITH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: api_key
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 20

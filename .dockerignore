@@ -1,0 +1,36 @@
+# Build context for `langgraph build` (the agent-server image). The graph talks to
+# the MCP servers over HTTP, so it only needs the Python source — not venvs, the UI,
+# git, caches, or any .env (keeps the image small AND keeps secrets out of it).
+
+# VCS / IDE / tooling
+.git
+.github
+.claude
+.vscode
+
+# Python virtualenvs + caches (the 3.5GB culprits)
+.venv
+**/.venv
+__pycache__
+**/__pycache__
+*.pyc
+.ruff_cache
+.mypy_cache
+.pytest_cache
+
+# Secrets / local runtime state — must NOT be baked into a published image
+.env
+*.env
+**/.env
+.langgraph_api
+
+# Heavy / unrelated to the agent-server image
+agent-chat-ui
+node_modules
+**/node_modules
+deploy-k8s
+diagrams
+**/.exploitfarm
+
+# OS cruft
+.DS_Store

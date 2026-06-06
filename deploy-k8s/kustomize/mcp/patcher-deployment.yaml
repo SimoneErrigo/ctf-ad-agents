@@ -1,0 +1,68 @@
+# patcher-mcp is a stateful SINGLETON: it owns a git working tree (RWO PVC) and a
+# single SSH identity, so two replicas would race on git/push. Recreate
+# guarantees the old pod is gone before the new one mounts the volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patcher-mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: patcher-mcp
+  template:
+    metadata:
+      labels:
+        app: patcher-mcp
+    spec:
+      containers:
+        - name: patcher-mcp
+          image: ghcr.io/simoneerrigo/patcher-mcp:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mcp
+              containerPort: 8766
+          envFrom:
+            - configMapRef:
+                name: patcher-config
+          env:
+            # Competition VM coordinates, from the shared endpoints ConfigMap.
+            - name: VM_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: endpoints
+                  key: VM_IP
+            - name: VM_SSH_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: endpoints
+                  key: VM_SSH_USER
+            - name: VM_SSH_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: endpoints
+                  key: VM_SSH_PORT
+          volumeMounts:
+            - name: workspace
+              mountPath: /var/lib/patcher/workspace
+            - name: ssh-key
+              mountPath: /root/.ssh
+              readOnly: true
+          readinessProbe:
+            tcpSocket: { port: 8766 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8766 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: patcher-workspace
+        - name: ssh-key
+          secret:
+            secretName: patcher-ssh # you create this from your deploy key
+            defaultMode: 0400 # ssh refuses world/group-readable keys

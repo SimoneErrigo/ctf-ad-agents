@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,13 +253,26 @@ async def get_diff(service: str, ref: str | None = None) -> str:
 # Workspace initialization
 
 
-async def ensure_service_repo(service: str) -> dict:
-    """Initialize the service repo if missing.
+async def _repo_has_commit(root: Path, env: dict[str, str]) -> bool:
+    """True if the repo at `root` has at least one commit (a valid HEAD)."""
+    res = await _run(["git", "rev-parse", "--verify", "HEAD"], cwd=root, env=env)
+    return res.ok
 
-    If the local path already has a .git, do nothing. Otherwise, try
-    `git clone` from the configured remote URL. The remote bare repo must
-    exist on the VM (see README for the manual setup). If clone fails (e.g.
-    empty bare repo), fall back to `git init` + `git remote add origin`.
+
+async def ensure_service_repo(service: str) -> dict:
+    """Materialize the service repo locally WITH source, or fail loudly.
+
+    The bare repo on the VM is seeded by scripts/init-vm.sh; here we only ever
+    CLONE it. We deliberately do NOT `git init` an empty local repo: a
+    content-less repo is indistinguishable from "source present" to the agent
+    and sends it into an infinite list_files/git_log loop.
+
+    - local repo exists AND has a commit -> "already-present".
+    - nothing local, OR a leftover empty `.git` (an earlier failed clone) ->
+      wipe and re-clone (self-heals the stale-empty-workspace bug).
+    - clone fails (remote unreachable / repo missing), OR the clone is empty
+      (bare repo never seeded) -> raise PatcherError, so the tool returns
+      ok=false and the agent stops instead of looping on empty reads.
 
     Sets local user.name/user.email so commits don't need a global config.
     """
@@ -267,33 +281,38 @@ async def ensure_service_repo(service: str) -> dict:
     service = canonical_service_name(service, s)
     root = service_root(service, s)
     remote = s.remote_url(service)
-    created = False
+    env = _git_env(s)
 
-    if (root / ".git").exists():
+    if (root / ".git").exists() and await _repo_has_commit(root, env):
         action = "already-present"
+        created = False
     else:
+        # Either nothing here, or a content-less leftover from a prior failed
+        # clone. Remove whatever is there and clone fresh from the remote.
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
         root.parent.mkdir(parents=True, exist_ok=True)
-        clone = await _run(["git", "clone", remote, str(root)], env=_git_env(s))
-        if clone.ok:
-            action = "cloned"
-            created = True
-        else:
-            # Empty bare repo or first-time init: create local repo, set remote.
-            root.mkdir(parents=True, exist_ok=True)
-            init = await _run(["git", "init", "-b", s.patcher_default_branch], cwd=root, env=_git_env(s))
-            if not init.ok:
-                raise PatcherError(f"git init failed: {init.stderr.strip()}")
-            add_remote = await _run(
-                ["git", "remote", "add", "origin", remote], cwd=root, env=_git_env(s),
+        clone = await _run(["git", "clone", remote, str(root)], env=env)
+        if not clone.ok:
+            raise PatcherError(
+                f"no source for {service}: clone from {remote} failed "
+                f"({clone.stderr.strip() or 'remote unreachable'}). "
+                "Seed the bare repo on the VM with scripts/init-vm.sh, then retry."
             )
-            if not add_remote.ok:
-                raise PatcherError(f"git remote add failed: {add_remote.stderr.strip()}")
-            action = "initialized"
-            created = True
+        action = "cloned"
+        created = True
 
     # Per-repo identity (idempotent)
     await _git(service, ["config", "user.name", s.patcher_git_user_name])
     await _git(service, ["config", "user.email", s.patcher_git_user_email])
+
+    # A clone can succeed yet be empty when the bare repo has no commits. That
+    # is not usable source: fail loudly instead of returning a hollow success.
+    if not await _repo_has_commit(root, env):
+        raise PatcherError(
+            f"no source for {service}: repo at {remote} is empty (no commits). "
+            "Seed it with scripts/init-vm.sh, then retry."
+        )
 
     return {
         "requested_service": requested_service,
@@ -302,6 +321,7 @@ async def ensure_service_repo(service: str) -> dict:
         "remote": remote,
         "action": action,
         "created": created,
+        "has_source": True,
     }
 
 
