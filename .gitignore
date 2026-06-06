@@ -167,6 +167,7 @@ venv.bak/
 .vscode/
 .claude/
 .langgraph_api/
+notes.txt
 
 # Agent Chat UI: third-party Next.js frontend, cloned locally and pointed at the
 # Agent Server (:2024). Run it from its own clone.
