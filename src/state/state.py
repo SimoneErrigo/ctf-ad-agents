@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from langgraph.graph import MessagesState
 
@@ -7,6 +7,9 @@ class Classification(TypedDict):
     """A single routing decision: which agent to call with what query."""
     source: Literal["traffic", "patch", "exploit"]
     query: str
+    # Set when the task targets ALL services: classify expands it into one task per
+    # live service. The `query` is then service-agnostic; classify prepends each.
+    fan_out_all: NotRequired[bool]
 
 
 class RouterState(MessagesState):

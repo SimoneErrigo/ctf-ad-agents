@@ -57,7 +57,7 @@ async def make_graph():
     workflow.add_node(
         "supervisor", build_supervisor_agent(), destinations=("classify", END)
     )
-    workflow.add_node("classify", make_classify_node(structured_llm))
+    workflow.add_node("classify", make_classify_node(structured_llm, registry))
     workflow.add_node("traffic", traffic_agent)
     workflow.add_node("patch", patch_agent)
     # The exploit agent tends to need a longer ReAct budget for its test->edit loop.
