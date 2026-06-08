@@ -72,26 +72,57 @@ def resolve_service(service: str, settings: Settings | None = None) -> dict:
     """Expose canonicalization details for agents and tests."""
     s = settings or get_settings()
     canonical = canonical_service_name(service, s)
+    sub = service_subpath(service, s)
     return {
         "requested_service": service,
         "service": canonical,
         "aliased": service != canonical,
-        "root": str(service_root(canonical, s)),
+        "subpath": sub,
+        "root": str(work_root(service, s)),
+        "repo_root": str(service_root(canonical, s)),
         "remote": s.remote_url(canonical),
     }
 
 
 def service_root(service: str, settings: Settings | None = None) -> Path:
-    """Return the local working tree path for `service`, validated."""
+    """Return the repo working tree path for `service` (clone/push/deploy root)."""
     s = settings or get_settings()
     canonical = canonical_service_name(service, s)
     # Path method to resolve() the path
     return (s.patcher_workspace_root / canonical).resolve()
 
 
-def _scoped_path(service: str, rel_path: str, settings: Settings | None = None) -> Path:
-    """Resolve `rel_path` inside the service root, refusing traversal."""
+def service_subpath(service: str, settings: Settings | None = None) -> str:
+    """Subdirectory inside the repo this service lives in ("" if it owns the repo).
+
+    Keyed by the *requested* id (not the canonical repo name), so several ids that
+    alias to one repo can each scope to their own subdir.
+    """
+    s = settings or get_settings()
+    subs = dict(s.patcher_service_subpaths)
+    subs.update({k.lower(): v for k, v in s.patcher_service_subpaths.items()})
+    requested = service.strip()
+    sub = subs.get(requested, subs.get(requested.lower(), ""))
+    return sub.strip("/") if sub else ""
+
+
+def work_root(service: str, settings: Settings | None = None) -> Path:
+    """Root for file/edit ops: the repo root, or its per-service subpath if set."""
     root = service_root(service, settings)
+    sub = service_subpath(service, settings)
+    if not sub:
+        return root
+    candidate = (root / sub).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise PatcherError(f"service subpath escapes the repo root: {sub!r}")
+    return candidate
+
+
+def _scoped_path(service: str, rel_path: str, settings: Settings | None = None) -> Path:
+    """Resolve `rel_path` inside the service work root, refusing traversal."""
+    root = work_root(service, settings)
     # Reject absolute paths up front, the agent should only ever pass paths
     # relative to the service root.
     if os.path.isabs(rel_path):
@@ -200,7 +231,7 @@ async def read_file(service: str, rel_path: str) -> str:
 async def list_files(service: str, rel_path: str = ".") -> list[dict]:
     """List directory entries. Skips `.git/`. Caps at `patcher_max_list_entries`."""
     s = get_settings()
-    root = service_root(service, s)
+    root = work_root(service, s)
     base = _scoped_path(service, rel_path, s) if rel_path not in ("", ".") else root
     if not base.exists():
         raise PatcherError(f"path not found: {rel_path}")
@@ -242,6 +273,10 @@ async def get_diff(service: str, ref: str | None = None) -> str:
     """
     s = get_settings()
     args = ["diff", "--patch", "--stat"] if ref is None else ["diff", "--patch", "--stat", f"{ref}..HEAD"]
+    sub = service_subpath(service, s)
+    if sub:
+        # Scope the diff to this service's subdir and show subpath-relative paths.
+        args += [f"--relative={sub}", "--", sub]
     res = await _git(service, args)
     cap = s.patcher_max_diff_bytes
     out = res.stdout
@@ -478,12 +513,16 @@ async def apply_patch(
     await _switch_branch(service, branch, s)
 
     root = service_root(service, s)
+    # Patch paths are relative to the service work root; --directory prefixes the
+    # subpath so it applies correctly at the repo root (no-op when no subpath).
+    sub = service_subpath(requested_service, s)
+    apply_cmd = ["git", "apply", f"--directory={sub}"] if sub else ["git", "apply"]
     patch_bytes = patch.encode()
-    check = await _run(["git", "apply", "--check", "-"], cwd=root, env=_git_env(s), input_bytes=patch_bytes)
+    check = await _run([*apply_cmd, "--check", "-"], cwd=root, env=_git_env(s), input_bytes=patch_bytes)
     if not check.ok:
         raise PatcherError(f"git apply --check failed: {(check.stderr or check.stdout).strip()}")
 
-    applied = await _run(["git", "apply", "-"], cwd=root, env=_git_env(s), input_bytes=patch_bytes)
+    applied = await _run([*apply_cmd, "-"], cwd=root, env=_git_env(s), input_bytes=patch_bytes)
     if not applied.ok:
         raise PatcherError(f"git apply failed: {(applied.stderr or applied.stdout).strip()}")
 

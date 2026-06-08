@@ -35,6 +35,16 @@ class Settings(BaseSettings):
             "Example env JSON: {'web1.1':'cc-forms'}."
         ),
     )
+    patcher_service_subpaths: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional map of service id/name to a subdirectory inside its repo. "
+            "Use it for multi-service composes: several service ids share one repo "
+            "(via aliases) but file ops are scoped to each one's subpath, while "
+            "clone/push/deploy stay at the repo root. "
+            "Example env JSON: {'JanusIdService':'service_name','JanusIdService2':'service_name'}."
+        ),
+    )
 
     # Competition VM (git push target)
     vm_ip: str = Field(

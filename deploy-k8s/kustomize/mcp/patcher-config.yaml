@@ -19,5 +19,6 @@ data:
   PATCHER_MAX_FILE_BYTES: "262144"
   PATCHER_MAX_DIFF_BYTES: "524288"
   PATCHER_MAX_LIST_ENTRIES: "500"
-  PATCHER_SERVICE_ALIASES: '{"ezblog":"easyblog","NotABook":"notabook","pols":"polls","bg":"buggy","soh-nginx":"seaofhackerz","soh-backend":"seaofhackerz","SOH1":"seaofhackerz","SOH2":"seaofhackerz","SeaOfHackerz":"seaofhackerz","auth_service":"cyberuni","examnotes":"cyberuni","CyberUni":"cyberuni","CyberUni2":"cyberuni"}'
+  PATCHER_SERVICE_ALIASES: '{"ezblog":"easyblog","NotABook":"notabook","Polls":"polls","Buggy":"buggy","soh1":"soh","soh-2":"soh","CyberUni":"cyberuni","CyberUni2":"cyberuni"}'
+  PATCHER_SERVICE_SUBPATHS: '{"CyberUni":"auth_service","CyberUni2":"examnotes","soh1":"backend","soh-2":"frontend"}'
   PATCHER_DEPLOY_WORKTREES:
