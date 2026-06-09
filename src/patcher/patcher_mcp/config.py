@@ -25,14 +25,12 @@ class Settings(BaseSettings):
         ),
     )
     patcher_service_aliases: dict[str, str] = Field(
-        default_factory=lambda: {
-            "CC-Forms-backend": "cc-forms",
-            "CCForms": "cc-forms",
-            "web1.1": "cc-forms",
-        },
+        default_factory=dict,
         description=(
-            "Map externally visible service names/ids to patcher workspace names. "
-            "Example env JSON: {'web1.1':'cc-forms'}."
+            "Override map for service names the auto-resolver can't infer. Names are "
+            "normally matched to the real workspace/VM repos automatically (case, "
+            "separators and a trailing role word are ignored), so this is only needed "
+            "for arbitrary ids."
         ),
     )
     patcher_service_subpaths: dict[str, str] = Field(

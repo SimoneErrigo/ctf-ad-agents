@@ -53,34 +53,106 @@ def _validate_service_name(service: str) -> None:
         )
 
 
-def canonical_service_name(service: str, settings: Settings | None = None) -> str:
-    """Return the patcher workspace name for a user-facing service id/name."""
+def _normalize(name: str) -> str:
+    """Lowercase and drop every non-alphanumeric char: a case/separator-insensitive key."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _match_candidate(requested: str, candidates: list[str]) -> str | None:
+    """Map `requested` to one of `candidates` (real service repo names).
+
+    Tries, in order: exact, case-insensitive, normalized equality (so `CCForms`,
+    `cc-forms` and `CC_Forms` collapse together), then a UNIQUE normalized prefix
+    match (so a role suffix like `cc-forms-backend` still finds `cc-forms`).
+    Returns None when nothing matches or the match is ambiguous, leaving the
+    caller to fall back or raise a candidate-listing error rather than guess.
+    """
+    if requested in candidates:
+        return requested
+    by_lower = {c.lower(): c for c in candidates}
+    if requested.lower() in by_lower:
+        return by_lower[requested.lower()]
+    req = _normalize(requested)
+    if not req:
+        return None
+    by_norm: dict[str, str] = {}
+    for c in candidates:
+        by_norm.setdefault(_normalize(c), c)
+    if req in by_norm:
+        return by_norm[req]
+    if len(req) >= 3:
+        hits = [
+            orig for norm, orig in by_norm.items()
+            if len(norm) >= 3 and (req.startswith(norm) or norm.startswith(req))
+        ]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
+def canonical_service_name(
+    service: str,
+    settings: Settings | None = None,
+    candidates: list[str] | None = None,
+) -> str:
+    """Return the patcher workspace repo name for a user-facing service id/name.
+
+    Resolution order: an explicit PATCHER_SERVICE_ALIASES override (case-
+    insensitive) wins; otherwise the name is auto-matched against the known
+    service repos (`candidates`, defaulting to the materialized workspace) so
+    case/separator/suffix differences need no config. An unresolved name is
+    returned unchanged, leaving the clone path to report it against the real
+    repo list.
+    """
     s = settings or get_settings()
     requested = service.strip()
     _validate_service_name(requested)
 
-    aliases = dict(s.patcher_service_aliases)
-    # Add lowercase keys for case-insensitive matching, but preserve original keys for canonicalization
-    aliases.update({k.lower(): v for k, v in s.patcher_service_aliases.items()})
-    # Exact match first, then case-insensitive match, then fallback to the original requested name
-    canonical = aliases.get(requested, aliases.get(requested.lower(), requested))
+    aliases = s.patcher_service_aliases
+    by_lower = {k.lower(): v for k, v in aliases.items()}
+    if requested in aliases:
+        canonical = aliases[requested]
+    elif requested.lower() in by_lower:
+        canonical = by_lower[requested.lower()]
+    else:
+        known = candidates if candidates is not None else list_workspace_services(s)
+        canonical = _match_candidate(requested, known) or requested
+
     _validate_service_name(canonical)
     return canonical
 
 
-def resolve_service(service: str, settings: Settings | None = None) -> dict:
-    """Expose canonicalization details for agents and tests."""
+async def resolve_service(service: str, settings: Settings | None = None) -> dict:
+    """Canonicalize a service name and report what the patcher can actually reach.
+
+    Lists the real service repos (materialized workspace + best-effort VM
+    discovery), resolves `service` against them, and returns the canonical name
+    plus the available set, so a wrong/unknown name surfaces the valid options
+    immediately instead of a silent dead end.
+    """
     s = settings or get_settings()
-    canonical = canonical_service_name(service, s)
+    local = list_workspace_services(s)
+    remote = await list_remote_services(s)
+    candidates = sorted(set(local) | set(remote))
+    canonical = canonical_service_name(service, s, candidates=candidates)
     sub = service_subpath(service, s)
+    repo_root = (s.patcher_workspace_root / canonical).resolve()
+    materialized = canonical in local
     return {
         "requested_service": service,
         "service": canonical,
         "aliased": service != canonical,
+        "matched": canonical in candidates,
+        "materialized": materialized,
+        "available_services": candidates,
         "subpath": sub,
-        "root": str(work_root(service, s)),
-        "repo_root": str(service_root(canonical, s)),
+        "root": str(repo_root / sub if sub else repo_root),
+        "repo_root": str(repo_root),
         "remote": s.remote_url(canonical),
+        "next": (
+            None if materialized
+            else "call ensure_service_repo to clone it before reading or patching"
+        ),
     }
 
 
@@ -206,6 +278,36 @@ async def _git(
     return res
 
 
+async def list_remote_services(settings: Settings | None = None) -> list[str]:
+    """List of the seeded bare repos on the VM (their service names).
+
+    Runs `ls` in VM_GIT_REMOTE_ROOT over SSH and strips the `.git` suffix: this
+    is the authoritative set of canonical service names the patcher can clone.
+    Returns [] on any failure (SSH down, dir missing) so name resolution can
+    degrade to the requested name instead of breaking.
+    """
+    s = settings or get_settings()
+    remote_root = s.vm_git_remote_root.rstrip("/")
+    script = f"ls -1 {shlex.quote(remote_root)} 2>/dev/null || true"
+    # This runs on the hot resolve path, so a down or
+    # unreachable VM must not hang the agent waiting on the default SSH timeout.
+    ssh = s.ssh_base_command()
+    ssh = [ssh[0], "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", *ssh[1:]]
+    try:
+        res = await _run(ssh + [f"sh -c {shlex.quote(script)}"])
+    except Exception as exc:
+        log.warning("list_remote_services: SSH listing failed: %s", exc)
+        return []
+    names: list[str] = []
+    for line in res.stdout.splitlines():
+        name = line.strip()
+        if name.endswith(".git"):
+            name = name[: -len(".git")]
+        if name and _SERVICE_NAME_RE.match(name):
+            names.append(name)
+    return sorted(set(names))
+
+
 # Read operations
 
 
@@ -313,49 +415,76 @@ async def ensure_service_repo(service: str) -> dict:
     """
     s = get_settings()
     requested_service = service
-    service = canonical_service_name(service, s)
-    root = service_root(service, s)
-    remote = s.remote_url(service)
+    canonical = canonical_service_name(service, s)
+    root = service_root(canonical, s)
     env = _git_env(s)
 
     if (root / ".git").exists() and await _repo_has_commit(root, env):
-        action = "already-present"
-        created = False
-    else:
-        # Either nothing here, or a content-less leftover from a prior failed
-        # clone. Remove whatever is there and clone fresh from the remote.
-        if root.exists():
-            shutil.rmtree(root, ignore_errors=True)
-        root.parent.mkdir(parents=True, exist_ok=True)
-        clone = await _run(["git", "clone", remote, str(root)], env=env)
-        if not clone.ok:
-            raise PatcherError(
-                f"no source for {service}: clone from {remote} failed "
-                f"({clone.stderr.strip() or 'remote unreachable'}). "
-                "Seed the bare repo on the VM with scripts/init-vm.sh, then retry."
-            )
-        action = "cloned"
-        created = True
+        await _git(canonical, ["config", "user.name", s.patcher_git_user_name])
+        await _git(canonical, ["config", "user.email", s.patcher_git_user_email])
+        return {
+            "requested_service": requested_service,
+            "service": canonical,
+            "root": str(root),
+            "remote": s.remote_url(canonical),
+            "action": "already-present",
+            "created": False,
+            "has_source": True,
+        }
 
-    # Per-repo identity (idempotent)
-    await _git(service, ["config", "user.name", s.patcher_git_user_name])
-    await _git(service, ["config", "user.email", s.patcher_git_user_email])
+    # Nothing usable locally. Discover the real repo names on the VM and
+    # re-resolve, so a Janus/display-name mismatch (case, separators, a role
+    # suffix) finds the right bare repo instead of cloning a ghost.
+    # if discovery fails we keep the resolved name and let the clone error talk.
+    remote_services = await list_remote_services(s)
+    if remote_services:
+        match = _match_candidate(canonical, remote_services) or _match_candidate(
+            requested_service, remote_services
+        )
+        if match:
+            canonical = match
+        elif canonical not in remote_services:
+            raise PatcherError(
+                f"no service repo matching {requested_service!r} on the VM. "
+                f"Available services: {', '.join(remote_services)}. "
+                "Pass one of these names exactly, or set an override "
+                f'PATCHER_SERVICE_ALIASES={{"{requested_service}": "<repo>"}}.'
+            )
+        root = service_root(canonical, s)
+
+    remote = s.remote_url(canonical)
+
+    # remove whatever is there and clone fresh from the remote.
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    clone = await _run(["git", "clone", remote, str(root)], env=env)
+    if not clone.ok:
+        raise PatcherError(
+            f"no source for {canonical}: clone from {remote} failed "
+            f"({clone.stderr.strip() or 'remote unreachable'}). "
+            "Seed the bare repo on the VM with scripts/init-vm.sh, then retry."
+        )
+
+    # Per-repo identity
+    await _git(canonical, ["config", "user.name", s.patcher_git_user_name])
+    await _git(canonical, ["config", "user.email", s.patcher_git_user_email])
 
     # A clone can succeed yet be empty when the bare repo has no commits. That
-    # is not usable source: fail loudly instead of returning a hollow success.
+    # is not usable source: fail instead of returning a hollow success.
     if not await _repo_has_commit(root, env):
         raise PatcherError(
-            f"no source for {service}: repo at {remote} is empty (no commits). "
+            f"no source for {canonical}: repo at {remote} is empty (no commits). "
             "Seed it with scripts/init-vm.sh, then retry."
         )
 
     return {
         "requested_service": requested_service,
-        "service": service,
+        "service": canonical,
         "root": str(root),
         "remote": remote,
-        "action": action,
-        "created": created,
+        "action": "cloned",
+        "created": True,
         "has_source": True,
     }
 

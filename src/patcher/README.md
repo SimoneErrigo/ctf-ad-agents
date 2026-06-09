@@ -12,8 +12,15 @@ testing). For each service it creates the bare repo, installs the
 `post-receive` hook, seeds the repo from the service source, and pushes the
 first commit (which performs the initial deploy). POSIX sh; macOS + Linux.
 
+The bare-repo name you choose here is the patcher's **canonical service name**.
+You normally do **not** register aliases for it: the patcher auto-resolves a
+Janus/display name to it (matching ignores case, separators and a trailing role
+word, so `CCForms` and `cc-forms-backend` both find `cc-forms`) and discovers the
+repo list straight off the VM. Set `PATCHER_SERVICE_ALIASES` only for an id no
+normalization can reach, e.g.
+
 ```bash
-PATCHER_SERVICE_ALIASES={"web1.1":"cc-forms","CC-Forms-backend":"cc-forms","CCForms":"cc-forms"}
+PATCHER_SERVICE_ALIASES={"web1.1":"cc-forms"}
 ```
 
 ```bash
@@ -29,9 +36,10 @@ scripts/init-vm.sh --remote-root ~/AD-demo/patcher-test/git \
   cc-forms=~/AD-demo/patcher-test/cc-forms
 ```
 
-The service name must match the patcher's canonical repo name (see
-`PATCHER_SERVICE_ALIASES`) and the deploy path must match
-`PATCHER_DEPLOY_WORKTREES` so `deploy()` can verify it. `--exclude` keeps
+The bare-repo name here is the canonical service name (auto-resolved from a
+Janus/display name; override via `PATCHER_SERVICE_ALIASES` only for arbitrary
+ids) and the deploy path must match `PATCHER_DEPLOY_WORKTREES` so `deploy()` can
+verify it. `--exclude` keeps
 runtime/persistent dirs (DB data, uploads) out of git and untouched across
 deploys. `--authorized-key` installs the patch agent's public key (counterpart
 of the private key mounted in the container) into
@@ -87,7 +95,7 @@ Read-only:
 | Tool                      | What it does                                                                                          |
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `list_workspace_services` | List services currently materialized in the patcher workspace.                                        |
-| `resolve_service`         | Canonicalize a Janus/display name or alias (e.g. `web1.1`, `CC-Forms-backend`) to the workspace name. |
+| `resolve_service`         | Canonicalize a Janus/display name to the workspace repo (auto-matched, ignoring case/separators/role suffix) and list the available services. |
 | `list_files`              | Directory listing scoped to a service repo (`.git/` hidden).                                          |
 | `read_file`               | File contents (truncated to `PATCHER_MAX_FILE_BYTES`).                                                |
 | `git_status`              | `git status --short --branch` for the service repo.                                                   |

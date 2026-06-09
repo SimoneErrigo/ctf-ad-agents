@@ -47,9 +47,13 @@ def register_tools(mcp: FastMCP) -> None:
             Field(min_length=1, description="Service name/id to canonicalize, e.g. web1.1 or CC-Forms-backend."),
         ],
     ) -> dict[str, Any]:
-        """Resolve a Janus/service display name to the patcher workspace service name."""
+        """Resolve a Janus/service display name to the patcher workspace service name.
+
+        Also reports `available_services` (materialized workspace + repos seeded
+        on the VM), so a wrong name shows the valid options instead of dead-ending.
+        """
         try:
-            return git_functions.resolve_service(service)
+            return await git_functions.resolve_service(service)
         except PatcherError as e:
             return _as_error(e)
 
