@@ -142,25 +142,32 @@ async def _service_names(registry) -> list[str]:
 
 def make_classify_node(structured_llm, registry=None):
     """Build the ``classify`` node: route the query into sub-questions, expanding any
-    fan_out_all task into one per live Janus service."""
+    fan_out_all task into one per live Janus service. The live service names are fed
+    to the classifier so a request naming one of them (even an adjective-like name
+    such as "Buggy") scopes to that service instead of fanning out to all of them."""
 
     async def classify_query(state: RouterState) -> dict:
+        names = await _service_names(registry) if registry else []
+        system = CLASSIFY_PROMPT
+        if names:
+            system += (
+                "\n\nLIVE SERVICES: " + ", ".join(names) + ". A request word matching "
+                "one of these (case-insensitive) is that service's NAME, even if it "
+                "reads like an adjective or quality (e.g. a service named 'Buggy'): "
+                "scope every sub-question to that service and do NOT set fan_out_all."
+            )
         result = await structured_llm.ainvoke([
-            {"role": "system", "content": CLASSIFY_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": state["query"]},
         ])
         out: list[Classification] = []
-        names: list[str] | None = None
         for c in result.classifications:
-            if c.get("fan_out_all"):
-                if names is None:
-                    names = await _service_names(registry) if registry else []
-                if names:
-                    out.extend(
-                        {"source": c["source"], "query": f"For service '{n}': {c['query']}"}
-                        for n in names
-                    )
-                    continue
+            if c.get("fan_out_all") and names:
+                out.extend(
+                    {"source": c["source"], "query": f"For service '{n}': {c['query']}"}
+                    for n in names
+                )
+                continue
             out.append({"source": c["source"], "query": c["query"]})
         return {"classifications": out}
 
