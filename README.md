@@ -11,14 +11,7 @@ approval.
 One LangGraph graph (`src/graph.py:make_graph`, served by the LangGraph Agent
 Server):
 
-```
-operator ──> supervisor ──(dispatch tool, Command goto)──> classify
-                │                                             │ Send fan-out
-                └──> END (direct reply)        ┌──────────────┼──────────────┐
-                                            traffic         patch         exploit
-                                               └──────────────┼──────────────┘
-                                                            final ──> END
-```
+![alt text](diagrams/LangGraphAgentServer-2026-06-10-083300.png "LangGraph Agent Server")
 
 - **supervisor** (`src/agents/conversational.py`, Haiku) -> operator-facing front
   door. Replies directly to small talk; hands any security goal to the pipeline
