@@ -1,0 +1,43 @@
+flowchart TD
+    Operator(["Operator (Agent Chat UI)"])
+    Server[("LangGraph Agent Server<br/>persistence: Postgres/Redis (Helm)<br/>or in-memory (langgraph dev)")]
+    Janus[("Janus<br/>reverse proxy + packet DB<br/>+ rules / alerts")]
+    VM[("Competition VM<br/>bare git repos + post-receive hook")]
+    Farm[("exploitfarm server<br/>(xfarm)")]
+
+    Operator -->|"user message (thread_id)"| Sup
+    Operator -.->|"HITL approve / reject<br/>Command(resume={interrupt_id: ...})"| Server
+
+    subgraph Graph["make_graph() — one shared `messages` channel"]
+      direction TB
+      Sup["supervisor<br/>create_agent, Haiku<br/>tool: dispatch_security_task"]
+      Cls["classify<br/>Haiku + structured output<br/>fan_out_all -> one task per live service"]
+      Tr["traffic<br/>create_agent, Sonnet<br/>janus `defender` view<br/>HITL: create/update/delete_rule"]
+      Pa["patch<br/>create_agent, Sonnet<br/>patcher MCP<br/>HITL: deploy / rollback"]
+      Ex["exploit<br/>create_agent, Sonnet<br/>exploiter + janus `exploit` + patcher `read`<br/>HITL: push / start_exploit"]
+      Fin["final<br/>Haiku synthesis<br/>(reports since last dispatch)"]
+
+      Sup -->|"direct reply"| End([END])
+      Sup -->|"Command(goto, graph=PARENT)"| Cls
+      Cls -->|Send| Tr
+      Cls -->|Send| Pa
+      Cls -->|Send| Ex
+      Cls -->|"no classifications"| Fin
+      Tr --> Fin
+      Pa --> Fin
+      Ex --> Fin
+      Fin --> End
+    end
+
+    Graph <-.->|"checkpoint per super-step<br/>HITL interrupts pause/resume"| Server
+
+    Tr <-.->|"MCP /defender/mcp"| Janus
+    Ex <-.->|"MCP /exploit/mcp (read-only packets)"| Janus
+    Pa <-.->|"MCP :8766"| Patcher[("patcher-mcp<br/>git workspace + SSH")]
+    Ex <-.->|"MCP /read/mcp (read-only source)"| Patcher
+    Ex <-.->|"MCP :8767"| Exploiter[("exploiter-mcp<br/>xfarm workspace")]
+    Patcher -.->|"git push ssh://...<br/>post-receive: rebuild"| VM
+    Exploiter -.->|"push / group attack / flags"| Farm
+
+    classDef ext fill:#eef,stroke:#447,color:#113;
+    class Server,Janus,Operator,VM,Patcher,Exploiter,Farm ext;
