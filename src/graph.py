@@ -69,7 +69,7 @@ async def make_graph():
     # dispatch tool overrides this with Command(goto="classify") when handing off.
     workflow.add_edge("supervisor", END)
     workflow.add_conditional_edges(
-        "classify", route_to_agents, ["traffic", "patch", "exploit"]
+        "classify", route_to_agents, ["traffic", "patch", "exploit", "final"]
     )
     # Specialists fan in to `final`, which synthesizes one operator-facing reply.
     workflow.add_edge("traffic", "final")

@@ -79,7 +79,13 @@ def dispatch_security_task(
             "query": query,
             "messages": [
                 tool_call_message,
-                ToolMessage("Routing to specialists.", tool_call_id=tool_call_id),
+                # `name` marks the dispatch point: the final node synthesizes only
+                # the specialist reports that come after the LAST such message.
+                ToolMessage(
+                    "Routing to specialists.",
+                    tool_call_id=tool_call_id,
+                    name="dispatch_security_task",
+                ),
             ],
         },
     )

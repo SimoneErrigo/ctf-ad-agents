@@ -160,7 +160,6 @@ def service_root(service: str, settings: Settings | None = None) -> Path:
     """Return the repo working tree path for `service` (clone/push/deploy root)."""
     s = settings or get_settings()
     canonical = canonical_service_name(service, s)
-    # Path method to resolve() the path
     return (s.patcher_workspace_root / canonical).resolve()
 
 
@@ -198,7 +197,6 @@ def _scoped_path(service: str, rel_path: str, settings: Settings | None = None) 
     # Reject absolute paths up front, the agent should only ever pass paths
     # relative to the service root.
     if os.path.isabs(rel_path):
-        # Prints raw rel_path.
         raise PatcherError(f"path must be relative to the service root: {rel_path!r}")
     candidate = (root / rel_path).resolve()
     try:
@@ -681,8 +679,6 @@ async def discard_changes(service: str, branch: str | None = None) -> dict:
 # Deploy / rollback
 
 
-# It is a "hidden error detector"
-
 def _remote_output_has_hook_error(output: str) -> bool:
     """Detection of a failed post-receive hook in push output.
 
@@ -710,9 +706,6 @@ def _remote_output_has_hook_error(output: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
-# This is because "push successful" doesn't guarantee that the remote contains exactly what
-# we expect
-
 async def _verify_remote_branch(service: str, branch: str, sha: str) -> dict:
     """Confirm that `origin/<branch>` really points at the SHA we just pushed.
 
@@ -730,8 +723,6 @@ async def _verify_remote_branch(service: str, branch: str, sha: str) -> dict:
         )
     return {"origin_branch": f"origin/{branch}", "commit_sha": remote_sha}
 
-# Verifies that the code has actually been deployed on the VM. It connects via SSH and checks the actual 
-# working directory (the worktree), not just the repository
 
 async def _verify_remote_worktree(
     service: str,
@@ -783,15 +774,6 @@ async def _verify_remote_worktree(
     return {"worktree": worktree, "commit_sha": res.stdout.strip()}
 
 
-
-# It's the orchestrator. It performs the git push, then runs the following checks in sequence: 
-# 1) was the push successful? 
-# 2) did the hook report errors (via _remote_output_has_hook_error)? 
-# 3) is the remote ref correct (_verify_remote_branch)? 
-# 4) if there's a worktree, is the live code correct (_verify_remote_worktree)? 
-# Only if everything passes does it return deployed: True. 
-# In practice: "push the code and then prove to me that it's actually in production."
-
 async def deploy(service: str, branch: str | None = None) -> dict:
     """`git push origin <branch>`. The VM's post-receive hook does the rebuild."""
     s = get_settings()
@@ -837,8 +819,6 @@ async def deploy(service: str, branch: str | None = None) -> dict:
         "verified": verified,
     }
 
-# Safely undo a deployment: Instead of rewriting history (force-push, risky), 
-# create a new revert commit that undoes the changes, then# publishes it using the reuse deploy.
 
 async def rollback(service: str, commit_sha: str, branch: str | None = None) -> dict:
     """Create a revert commit for `commit_sha` and push it.

@@ -37,14 +37,6 @@ def _last_tool_msg(state: Any, name: str):
     return None
 
 
-def _last_tool_arg(state: Any, name: str, key: str):
-    for m in reversed(state.get("messages") or []):
-        for tc in getattr(m, "tool_calls", None) or []:
-            if tc.get("name") == name:
-                return (tc.get("args") or {}).get(key)
-    return None
-
-
 # approval-card summaries, one per critical tool
 
 def _create_rule(a: dict[str, Any]) -> str:
@@ -52,6 +44,10 @@ def _create_rule(a: dict[str, Any]) -> str:
         f"Create rule '{a.get('name')}' on service '{a.get('service_id')}' "
         f"with action='{a.get('action')}', expression: {a.get('expression')!r}"
     )
+
+
+def _delete_rule(a: dict[str, Any]) -> str:
+    return f"Delete rule id='{a.get('rule_id')}' (removes a live defense)"
 
 
 def _update_rule(a: dict[str, Any]) -> str:
@@ -92,8 +88,21 @@ def _deploy_detail(state: Any) -> str:
 
 
 def _exploit_detail(state: Any) -> str:
-    src = _last_tool_arg(state, "write_exploit_file", "content")
-    return f"\n\n```python\n{_clip(src)}\n```" if src else "\n\n(no source in transcript, review the stream)"
+    """Preview the MOST RECENT exploit edit: full source for write_exploit_file,
+    the old->new snippet for replace_text (the extend workflow edits in place,
+    so showing only the last full write would be stale or missing)."""
+    for m in reversed(state.get("messages") or []):
+        for tc in reversed(getattr(m, "tool_calls", None) or []):
+            args = tc.get("args") or {}
+            if tc.get("name") == "write_exploit_file":
+                return f"\n\n```python\n{_clip(args.get('content') or '')}\n```"
+            if tc.get("name") == "replace_text":
+                return (
+                    f"\n\nLatest edit to {args.get('path')!r}:\n```\n"
+                    f"--- old\n{_clip(args.get('old') or '', 800)}\n"
+                    f"+++ new\n{_clip(args.get('new') or '', 800)}\n```"
+                )
+    return "\n\n(no source in transcript, review the stream)"
 
 
 # per-agent middleware factories
@@ -103,12 +112,14 @@ def traffic_hitl() -> HumanInTheLoopMiddleware:
 
     NOTE: HITL create_rule/update_rule for ANY action (alert included), not just
     drop/both, the middleware keys on tool name, not args, and any live rule
-    write is worth an operator click.
+    write is worth an operator click. delete_rule is gated too: removing a live
+    drop rule takes a defense down, which is at least as dangerous as adding one.
     """
     return HumanInTheLoopMiddleware(
         interrupt_on={
             "create_rule": _control(_create_rule),
             "update_rule": _control(_update_rule),
+            "delete_rule": _control(_delete_rule),
         }
     )
 

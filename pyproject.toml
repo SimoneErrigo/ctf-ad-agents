@@ -6,16 +6,13 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "langchain>=1.3.1",
-    "langchain-anthropic>=1.4.3",
     "langchain-aws>=1.4.7",
     "langchain-mcp-adapters>=0.2.2",
     "langgraph>=1.2.0",
-    "langgraph-checkpoint-postgres>=3.1.0",
-    "langsmith[claude-agent-sdk]>=0.8.5",
-    "psycopg[binary,pool]>=3.3.4",
+    "langsmith>=0.8.5",
     "python-dotenv>=1.0.0",
 ]
 
 [dependency-groups]
 # `langgraph dev` (in-memory Agent Server) for local dev + Agent Chat UI.
-dev = ["langgraph-cli[inmem]"]
+dev = ["langgraph-cli[inmem]", "pytest>=8"]

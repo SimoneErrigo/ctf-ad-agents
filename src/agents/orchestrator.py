@@ -5,7 +5,7 @@ import logging
 import os
 
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Send
 from pydantic import BaseModel, Field
 
@@ -105,12 +105,17 @@ already spans every service) -> leave fan_out_all unset.
 """
 
 
-def route_to_agents(state: RouterState) -> list[Send]:
+def route_to_agents(state: RouterState) -> list[Send] | str:
     """Fan out to sub-agents based on the classifications produced by classify.
 
     Each sub-agent is a subgraph node on the shared `messages` channel, so we
     hand it ONLY its scoped sub-question as the input message; its own reasoning
-    and tool calls merge back into the shared transcript (visible in the UI)."""
+    and tool calls merge back into the shared transcript (visible in the UI).
+    Zero classifications would otherwise end the run with no operator-facing
+    reply (the dispatch ToolMessage is the last thing on the thread), so route
+    straight to `final`, which answers the no-reports case."""
+    if not state["classifications"]:
+        return "final"
     return [
         Send(c["source"], {"messages": [HumanMessage(content=c["query"])]})
         for c in state["classifications"]
@@ -145,7 +150,7 @@ def make_classify_node(structured_llm, registry=None):
             {"role": "user", "content": state["query"]},
         ])
         out: list[Classification] = []
-        names: list[str] | None = None  
+        names: list[str] | None = None
         for c in result.classifications:
             if c.get("fan_out_all"):
                 if names is None:
@@ -205,18 +210,36 @@ def make_final_node(synthesis_llm):
             _SPECIALISTS
         )
 
+        # Only this dispatch's reports: the thread persists across turns, so slice
+        # the transcript after the CURRENT dispatch's ToolMessage (named after the
+        # dispatch tool), or earlier turns' specialist reports would be re-synthesized.
+        msgs = state["messages"]
+        start = 0
+        for i, msg in enumerate(msgs):
+            if isinstance(msg, ToolMessage) and msg.name == "dispatch_security_task":
+                start = i + 1
+
         # A fanned-out task yields several reports from the same specialist name, so
         # collect each run's FINAL message (no tool calls = its report), not just the
         # last one on the channel; this keeps one report per service.
         reports = [
             (msg.name, _message_text(msg))
-            for msg in state["messages"]
+            for msg in msgs[start:]
             if isinstance(msg, AIMessage) and msg.name in wanted and not msg.tool_calls
         ]
         request = state.get("query") or "the operator's request"
         blocks = "\n\n".join(
             f"## {name} specialist report\n{text}" for name, text in reports if text
         )
+        if not blocks:
+            return {"messages": [AIMessage(
+                content=(
+                    "No specialist produced a report for this request, so I have "
+                    "nothing to act on. Please rephrase or narrow the request "
+                    "(service, traffic vs source, and the action you want)."
+                ),
+                name="supervisor",
+            )]}
         human = (
             f"Operator request:\n{request}\n\n{blocks}\n\n"
             "Write the final answer for the operator now."
