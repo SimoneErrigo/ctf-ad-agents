@@ -11,6 +11,7 @@ https://github.com/modelcontextprotocol/servers-archived/tree/main/src/git
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -304,6 +305,71 @@ async def list_remote_services(settings: Settings | None = None) -> list[str]:
         if name and _SERVICE_NAME_RE.match(name):
             names.append(name)
     return sorted(set(names))
+
+
+async def list_vm_services(settings: Settings | None = None) -> dict:
+    """Inventory of services on the competition VM, gathered over SSH.
+
+    Returns `running_containers` (the Docker containers actually running on the
+    VM: name/image/status/ports) and `service_dirs` (the service folders present
+    on the VM, i.e. the bare repos under VM_GIT_REMOTE_ROOT). This is deliberately
+    broader than Janus' list_services, which only knows the services it proxies:
+    it surfaces services that run on the VM (or merely exist on disk) but are NOT
+    behind Janus. Degrades to empty lists on any SSH/Docker failure so the
+    inventory never crashes the agent.
+    """
+    s = settings or get_settings()
+    remote_root = s.vm_git_remote_root.rstrip("/")
+    # One SSH round-trip carries both queries; sentinel lines split the sections.
+    # `docker ps --format '{{json .}}'` emits one JSON object per container, which
+    # parses cleanly regardless of spaces in the image/status/ports fields.
+    script = (
+        "echo __CONTAINERS__; "
+        "docker ps --format '{{json .}}' 2>/dev/null; "
+        "echo __SERVICE_DIRS__; "
+        f"ls -1 {shlex.quote(remote_root)} 2>/dev/null || true"
+    )
+    # Bound the SSH wait so a down/unreachable VM can't hang the agent.
+    ssh = s.ssh_base_command()
+    ssh = [ssh[0], "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", *ssh[1:]]
+    try:
+        res = await _run(ssh + [f"sh -c {shlex.quote(script)}"])
+    except Exception as exc:
+        log.warning("list_vm_services: SSH failed: %s", exc)
+        return {"running_containers": [], "service_dirs": []}
+
+    containers: list[dict[str, str]] = []
+    service_dirs: list[str] = []
+    section: str | None = None
+    for line in res.stdout.splitlines():
+        stripped = line.strip()
+        if stripped == "__CONTAINERS__":
+            section = "containers"
+            continue
+        if stripped == "__SERVICE_DIRS__":
+            section = "dirs"
+            continue
+        if not stripped:
+            continue
+        if section == "containers":
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            containers.append({
+                "name": str(row.get("Names", "")),
+                "image": str(row.get("Image", "")),
+                "status": str(row.get("Status", "")),
+                "ports": str(row.get("Ports", "")),
+            })
+        elif section == "dirs":
+            name = stripped[: -len(".git")] if stripped.endswith(".git") else stripped
+            if _SERVICE_NAME_RE.match(name):
+                service_dirs.append(name)
+    return {
+        "running_containers": containers,
+        "service_dirs": sorted(set(service_dirs)),
+    }
 
 
 # Read operations

@@ -34,9 +34,15 @@ SYSTEM_PROMPT = (
     "- invent time/round filters: the DSL has no round/time field, so 'recent' means "
     "sort=\"desc\" with a bounded limit, never time_from/time_to;\n"
     "- write a rule unprompted (only when the operator asks).\n\n"
-    "INVENTORY-ONLY MODE: if the task only asks the Janus inventory/status (list the "
-    "services, how many, names/ports/ids, which are up/proxied), call list_services "
-    "ONCE, report, and STOP -> no packet reads, no analysis.\n\n"
+    "INVENTORY MODE: if the task only asks for the service inventory/status (list the "
+    "services, how many, names/ports/ids, which are up/proxied, or what's on the VM / "
+    "not behind Janus), call BOTH list_services (the services Janus proxies) and "
+    "list_vm_services (what actually runs on the VM + the service folders there) ONCE "
+    "each, then report a SINGLE combined inventory that marks: which services Janus "
+    "proxies, which run on the VM but are NOT behind Janus, and any service folder "
+    "present on the VM without a running container. STOP after -> no packet reads, no "
+    "analysis. (If list_vm_services returns empty, the VM is unreachable from the MCP -> "
+    "say so and report the Janus-proxied set alone.)\n\n"
     "INVESTIGATION METHOD:\n"
     "- Pull recent traffic with list_packets(sort=\"desc\", limit<=200) and call "
     "get_capture_status once to learn the current window; use flagid_round in the rows "
@@ -105,10 +111,14 @@ def _build_llm() -> ChatBedrockConverse:
     )
 
 
-async def build_traffic_agent(registry: MCPToolRegistry | None = None):
-    """Build the traffic agent with tools loaded from the Janus MCP registry."""
+async def build_traffic_agent(
+    registry: MCPToolRegistry | None = None,
+    patcher_read_registry: MCPToolRegistry | None = None,
+):
+    """Build the traffic agent with tools from the Janus MCP registry, plus the
+    patcher's read-only list_vm_services (VM service inventory)."""
     _assert_env()
-    tools = await get_traffic_tools(registry)
+    tools = await get_traffic_tools(registry, patcher_read_registry)
     return create_agent(
         model=_build_llm(),
         tools=tools,

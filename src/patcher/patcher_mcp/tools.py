@@ -41,6 +41,21 @@ def register_tools(mcp: FastMCP) -> None:
         tags={"patch", "read"},
         annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
     )
+    async def list_vm_services() -> dict[str, Any]:
+        """List the services on the competition VM, read live over SSH.
+
+        Returns `running_containers` (the Docker containers actually running on
+        the VM: name, image, status, ports) and `service_dirs` (the service
+        folders present on the VM). Unlike Janus' list_services, this shows services
+        that run on the VM (or merely exist on disk) but are NOT behind Janus. Pair the two for a
+        full inventory. Returns empty lists if the VM/Docker is unreachable.
+        """
+        return await git_functions.list_vm_services()
+
+    @mcp.tool(
+        tags={"patch", "read"},
+        annotations={"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False},
+    )
     async def resolve_service(
         service: Annotated[
             str,

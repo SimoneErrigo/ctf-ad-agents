@@ -43,7 +43,7 @@ async def make_graph():
     exploiter_registry = await build_exploiter_registry()
     patcher_read_registry = await build_patcher_read_registry()
 
-    traffic_agent = await build_traffic_agent(registry)
+    traffic_agent = await build_traffic_agent(registry, patcher_read_registry)
     patch_agent = await build_patch_agent(patcher_registry)
     exploit_agent = await build_exploit_agent(
         registry, exploiter_registry, patcher_read_registry

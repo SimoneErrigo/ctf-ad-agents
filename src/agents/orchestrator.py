@@ -90,11 +90,14 @@ inventory/status. Route here ONLY for a standalone traffic report, a rule/block/
 or an inventory question.
 - report/rule: "Inspect only recent traffic for service X; report endpoint/parameter/
   payload evidence, or create the requested Janus rule via HITL."
-- inventory: "List the services Janus currently proxies (name, id, ports, enabled) via
-  list_services and report which are up." No packet reads. If the request is ONLY
-  inventory/status (list/how many/names/ports/which are up), route it to traffic and
-  NOTHING else -> never to patch (patch knows only the source it has, not the live
-  proxy inventory), and add no packet-analysis scope the operator did not ask for.
+- inventory: "List the services and report their status." Route ALL inventory/status
+  requests to traffic and NOTHING else: list/how many/names/ports/which are up/proxied,
+  AND "on the VM" / "not behind Janus" / "all running services". Traffic now reports
+  BOTH the Janus-proxied services (list_services) AND what actually runs on the VM
+  incl. non-proxied ones (list_vm_services), so a VM/host inventory no longer needs
+  patch. No packet reads. Never route inventory to patch (it knows only the source it
+  has, not the live inventory), and add no packet-analysis scope the operator did not
+  ask for.
 
 ALL-SERVICES FAN-OUT: if an exploit or patch request targets every/the services
 collectively and names no specific service ("analyze the services", "find the vulns",
