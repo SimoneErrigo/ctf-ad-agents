@@ -3,7 +3,7 @@
 # Usage:
 #   deploy-k8s/rollout.sh            # use the moving dev tag
 #   deploy-k8s/rollout.sh <sha|tag>  # use an explicit tag, e.g. sha-1a2b3c4 or dev
-#   PULL_POLICY=Always deploy-k8s/rollout.sh  # force pulling the registry tag
+#   PULL_POLICY=IfNotPresent deploy-k8s/rollout.sh  # reuse local images intentionally
 set -euo pipefail
 
 NS=ctf-ad-agents
@@ -25,7 +25,7 @@ else
   TAG="dev"
 fi
 
-PULL_POLICY="${PULL_POLICY:-IfNotPresent}"
+PULL_POLICY="${PULL_POLICY:-Always}"
 
 echo ">> Rolling ctf-ad-agents services in namespace '$NS' onto tag: $TAG"
 

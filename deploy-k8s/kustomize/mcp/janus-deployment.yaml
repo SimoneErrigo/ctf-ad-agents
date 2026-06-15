@@ -17,7 +17,7 @@ spec:
       containers:
         - name: janus-mcp
           image: ghcr.io/simoneerrigo/janus-mcp:dev
-          imagePullPolicy: IfNotPresent # use the locally-loaded image if present
+          imagePullPolicy: Always
           ports:
             - name: mcp
               containerPort: 8765

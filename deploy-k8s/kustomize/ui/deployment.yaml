@@ -18,7 +18,7 @@ spec:
       containers:
         - name: agent-chat-ui
           image: ghcr.io/simoneerrigo/agent-chat-ui:dev
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 3000

@@ -323,9 +323,16 @@ async def list_vm_services(settings: Settings | None = None) -> dict:
     # One SSH round-trip carries both queries; sentinel lines split the sections.
     # `docker ps --format '{{json .}}'` emits one JSON object per container, which
     # parses cleanly regardless of spaces in the image/status/ports fields.
+    # Prepend the usual macOS/Linux docker install dirs: a non-interactive SSH
+    # shell often has a minimal PATH, so a bare `docker` may be "command not
+    # found" and look like "no containers". Capture docker's own exit code +
+    # stderr (no 2>/dev/null) so a FAILED query is reported as such, not as an
+    # empty list that the agent then mis-reads as "nothing is running".
     script = (
+        'export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:'
+        '/Applications/Docker.app/Contents/Resources/bin"; '
         "echo __CONTAINERS__; "
-        "docker ps --format '{{json .}}' 2>/dev/null; "
+        "{ docker ps --format '{{json .}}'; echo \"__DOCKER_RC__:$?\"; } 2>&1; "
         "echo __SERVICE_DIRS__; "
         f"ls -1 {shlex.quote(remote_root)} 2>/dev/null || true"
     )
@@ -336,10 +343,15 @@ async def list_vm_services(settings: Settings | None = None) -> dict:
         res = await _run(ssh + [f"sh -c {shlex.quote(script)}"])
     except Exception as exc:
         log.warning("list_vm_services: SSH failed: %s", exc)
-        return {"running_containers": [], "service_dirs": []}
+        return {
+            "running_containers": [], "service_dirs": [],
+            "containers_query_failed": True, "containers_error": f"SSH failed: {exc}",
+        }
 
     containers: list[dict[str, str]] = []
     service_dirs: list[str] = []
+    docker_rc: int | None = None
+    docker_err: list[str] = []
     section: str | None = None
     for line in res.stdout.splitlines():
         stripped = line.strip()
@@ -352,9 +364,16 @@ async def list_vm_services(settings: Settings | None = None) -> dict:
         if not stripped:
             continue
         if section == "containers":
+            if stripped.startswith("__DOCKER_RC__:"):
+                try:
+                    docker_rc = int(stripped.split(":", 1)[1])
+                except ValueError:
+                    docker_rc = None
+                continue
             try:
                 row = json.loads(stripped)
             except json.JSONDecodeError:
+                docker_err.append(stripped)  # docker error text, not a container
                 continue
             containers.append({
                 "name": str(row.get("Names", "")),
@@ -366,10 +385,18 @@ async def list_vm_services(settings: Settings | None = None) -> dict:
             name = stripped[: -len(".git")] if stripped.endswith(".git") else stripped
             if _SERVICE_NAME_RE.match(name):
                 service_dirs.append(name)
-    return {
+    result: dict = {
         "running_containers": containers,
         "service_dirs": sorted(set(service_dirs)),
     }
+    # Distinguish "docker ran, found nothing" from "docker query failed": only the
+    # former means no containers are running.
+    if docker_rc not in (0, None) or (not containers and docker_err):
+        result["containers_query_failed"] = True
+        result["containers_error"] = (
+            "\n".join(docker_err)[:500] or f"docker ps exited {docker_rc}"
+        )
+    return result
 
 
 # Read operations

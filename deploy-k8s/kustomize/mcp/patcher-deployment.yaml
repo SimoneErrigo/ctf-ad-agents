@@ -20,7 +20,7 @@ spec:
       containers:
         - name: patcher-mcp
           image: ghcr.io/simoneerrigo/patcher-mcp:dev
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - name: mcp
               containerPort: 8766
