@@ -91,6 +91,94 @@ def _match_candidate(requested: str, candidates: list[str]) -> str | None:
     return None
 
 
+def _configured_subpath(service: str, settings: Settings, *, exact: bool = False) -> str:
+    """Subpath from PATCHER_SERVICE_SUBPATHS for `service`.
+
+    exact=True matches only the original-case key, so a real repo name can never
+    pick up a subpath by case-folding (the bug where requesting repo `cyberuni`
+    silently scoped to subpath `auth_service`, because a config key `CyberUni`
+    lowercases to the repo name).
+    """
+    subs = settings.patcher_service_subpaths
+    if service in subs:
+        return subs[service].strip("/")
+    if exact:
+        return ""
+    low = {k.lower(): v for k, v in subs.items()}
+    val = low.get(service.lower(), "")
+    return val.strip("/") if val else ""
+
+
+def _repo_subdirs(repo: str, settings: Settings) -> list[str]:
+    """Top-level subdirectories of a MATERIALIZED repo workspace (excluding .git)."""
+    root = settings.patcher_workspace_root / repo
+    try:
+        return [e.name for e in root.iterdir() if e.is_dir() and e.name != ".git"]
+    except OSError:
+        return []
+
+
+def _subdir_index(repos: list[str], settings: Settings) -> dict[str, tuple[str, str]]:
+    """normalized(subdir) -> (repo, subdir) across materialized repos; ambiguous names dropped.
+
+    This is what lets a SUB-service inside a shared repo be addressed by its own
+    name (e.g. `examnotes` -> repo `cyberuni`, subpath `examnotes`) with no
+    per-service config, once that repo is cloned.
+    """
+    idx: dict[str, list[tuple[str, str]]] = {}
+    for repo in repos:
+        for sub in _repo_subdirs(repo, settings):
+            idx.setdefault(_normalize(sub), []).append((repo, sub))
+    return {k: v[0] for k, v in idx.items() if len(v) == 1}
+
+
+def _resolve_service(
+    service: str,
+    settings: Settings,
+    candidates: list[str] | None = None,
+    subdir_index: dict[str, tuple[str, str]] | None = None,
+) -> tuple[str, str]:
+    """Resolve a user-facing service id/name to (repo, subpath).
+
+    Order: PATCHER_SERVICE_ALIASES override (case-insensitive); then an exact REPO
+    name -> repo root (so a multi-service repo addressed by its own name shows its
+    subdirs, and a repo name never folds into a subpath key by case); then an
+    explicit PATCHER_SERVICE_SUBPATHS key (e.g. a Janus id like CyberUni2) ->
+    (repo, subpath); then a SUB-service whose name matches a repo subdir ->
+    (repo, subdir); else the fuzzy repo match, or the name unchanged so the clone
+    path can report it against the real repo list.
+    """
+    requested = service.strip()
+    _validate_service_name(requested)
+
+    aliases = settings.patcher_service_aliases
+    by_lower = {k.lower(): v for k, v in aliases.items()}
+    if requested in aliases or requested.lower() in by_lower:
+        repo = aliases.get(requested) or by_lower[requested.lower()]
+        return repo, _configured_subpath(requested, settings)
+
+    known = candidates if candidates is not None else list_workspace_services(settings)
+
+    # A genuine repo name wins and maps to the repo ROOT (collision fix).
+    direct = _match_candidate(requested, known)
+    if direct and _normalize(direct) == _normalize(requested):
+        return direct, _configured_subpath(requested, settings, exact=True)
+
+    # Explicit subpath config key (e.g. a Janus id: CyberUni2 -> examnotes).
+    sub = _configured_subpath(requested, settings)
+    if sub:
+        repo = direct or _match_candidate(re.sub(r"\d+$", "", requested), known) or requested
+        return repo, sub
+
+    # A sub-service addressed by its own name -> (repo, subdir), auto-detected.
+    idx = subdir_index if subdir_index is not None else _subdir_index(known, settings)
+    hit = idx.get(_normalize(requested))
+    if hit:
+        return hit
+
+    return (direct or requested), ""
+
+
 def canonical_service_name(
     service: str,
     settings: Settings | None = None,
@@ -98,29 +186,13 @@ def canonical_service_name(
 ) -> str:
     """Return the patcher workspace repo name for a user-facing service id/name.
 
-    Resolution order: an explicit PATCHER_SERVICE_ALIASES override (case-
-    insensitive) wins; otherwise the name is auto-matched against the known
-    service repos (`candidates`, defaulting to the materialized workspace) so
-    case/separator/suffix differences need no config. An unresolved name is
-    returned unchanged, leaving the clone path to report it against the real
-    repo list.
+    See `_resolve_service` for the full order. An unresolved name is returned
+    unchanged, leaving the clone path to report it against the real repo list.
     """
     s = settings or get_settings()
-    requested = service.strip()
-    _validate_service_name(requested)
-
-    aliases = s.patcher_service_aliases
-    by_lower = {k.lower(): v for k, v in aliases.items()}
-    if requested in aliases:
-        canonical = aliases[requested]
-    elif requested.lower() in by_lower:
-        canonical = by_lower[requested.lower()]
-    else:
-        known = candidates if candidates is not None else list_workspace_services(s)
-        canonical = _match_candidate(requested, known) or requested
-
-    _validate_service_name(canonical)
-    return canonical
+    repo, _ = _resolve_service(service, s, candidates)
+    _validate_service_name(repo)
+    return repo
 
 
 async def resolve_service(service: str, settings: Settings | None = None) -> dict:
@@ -135,11 +207,16 @@ async def resolve_service(service: str, settings: Settings | None = None) -> dic
     local = list_workspace_services(s)
     remote = await list_remote_services(s)
     candidates = sorted(set(local) | set(remote))
-    canonical = canonical_service_name(service, s, candidates=candidates)
-    sub = service_subpath(service, s)
+    canonical, sub = _resolve_service(service, s, candidates=candidates)
+    # If the name resolved to neither a known repo nor a materialized sub-service,
+    # it may be a sub-service of a repo not yet cloned -> discover it over SSH.
+    if canonical not in candidates and not sub:
+        hit = (await _discover_remote_subservices(s)).get(_normalize(service))
+        if hit:
+            canonical, sub = hit
     repo_root = (s.patcher_workspace_root / canonical).resolve()
     materialized = canonical in local
-    return {
+    result = {
         "requested_service": service,
         "service": canonical,
         "aliased": service != canonical,
@@ -155,6 +232,13 @@ async def resolve_service(service: str, settings: Settings | None = None) -> dic
             else "call ensure_service_repo to clone it before reading or patching"
         ),
     }
+    # When the repo holds several services, list the sibling subdirs so the agent
+    # can see it must scope into one (e.g. read examnotes/app/..., not the root).
+    if materialized:
+        subdirs = _repo_subdirs(canonical, s)
+        if len(subdirs) > 1:
+            result["subservices"] = sorted(subdirs)
+    return result
 
 
 def service_root(service: str, settings: Settings | None = None) -> Path:
@@ -167,15 +251,13 @@ def service_root(service: str, settings: Settings | None = None) -> Path:
 def service_subpath(service: str, settings: Settings | None = None) -> str:
     """Subdirectory inside the repo this service lives in ("" if it owns the repo).
 
-    Keyed by the *requested* id (not the canonical repo name), so several ids that
-    alias to one repo can each scope to their own subdir.
+    Resolved by `_resolve_service`: an explicit PATCHER_SERVICE_SUBPATHS key, or a
+    subdir auto-matched to the requested name in a multi-service repo. Keyed by the
+    *requested* id, so several ids sharing one repo each scope to their own subdir.
     """
     s = settings or get_settings()
-    subs = dict(s.patcher_service_subpaths)
-    subs.update({k.lower(): v for k, v in s.patcher_service_subpaths.items()})
-    requested = service.strip()
-    sub = subs.get(requested, subs.get(requested.lower(), ""))
-    return sub.strip("/") if sub else ""
+    _, sub = _resolve_service(service, s)
+    return sub
 
 
 def work_root(service: str, settings: Settings | None = None) -> Path:
@@ -305,6 +387,40 @@ async def list_remote_services(settings: Settings | None = None) -> list[str]:
         if name and _SERVICE_NAME_RE.match(name):
             names.append(name)
     return sorted(set(names))
+
+
+async def _discover_remote_subservices(settings: Settings | None = None) -> dict[str, tuple[str, str]]:
+    """normalized(subdir) -> (repo, subdir) for the top-level dirs of every bare repo.
+
+    The materialized `_subdir_index` only sees repos already cloned; this lets a
+    SUB-service be resolved by name BEFORE its (multi-service) repo is cloned, so
+    e.g. `ensure_service_repo("examnotes")` knows to clone `cyberuni` and scope to
+    its `examnotes/` subdir. One SSH round-trip, ambiguous names dropped, degrades
+    to {} on any failure (caller falls back to the requested name).
+    """
+    s = settings or get_settings()
+    root = s.vm_git_remote_root.rstrip("/")
+    script = (
+        f"cd {shlex.quote(root)} 2>/dev/null || exit 0; "
+        'for d in *.git; do [ -d "$d" ] || continue; repo=${d%.git}; '
+        'git --git-dir="$d" ls-tree -d --name-only HEAD 2>/dev/null | '
+        'while IFS= read -r sub; do printf "%s\\t%s\\n" "$repo" "$sub"; done; done'
+    )
+    ssh = s.ssh_base_command()
+    ssh = [ssh[0], "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", *ssh[1:]]
+    try:
+        res = await _run(ssh + [f"sh -c {shlex.quote(script)}"])
+    except Exception as exc:
+        log.warning("_discover_remote_subservices: SSH failed: %s", exc)
+        return {}
+    idx: dict[str, list[tuple[str, str]]] = {}
+    for line in res.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        repo, sub = (p.strip() for p in line.split("\t", 1))
+        if repo and sub and _SERVICE_NAME_RE.match(repo):
+            idx.setdefault(_normalize(sub), []).append((repo, sub))
+    return {k: v[0] for k, v in idx.items() if len(v) == 1}
 
 
 async def list_vm_services(settings: Settings | None = None) -> dict:
@@ -532,6 +648,12 @@ async def ensure_service_repo(service: str) -> dict:
         match = _match_candidate(canonical, remote_services) or _match_candidate(
             requested_service, remote_services
         )
+        if not match and canonical not in remote_services:
+            # Not a repo name: maybe a SUB-service of a multi-service repo not yet
+            # cloned (e.g. "examnotes" lives in repo "cyberuni"). Discover it.
+            hit = (await _discover_remote_subservices(s)).get(_normalize(requested_service))
+            if hit:
+                match = hit[0]
         if match:
             canonical = match
         elif canonical not in remote_services:
@@ -867,6 +989,76 @@ async def _verify_remote_worktree(
     return {"worktree": worktree, "commit_sha": res.stdout.strip()}
 
 
+_HOOK_KEYCHAIN_MARKER = "patcher-docker-config"
+_HOOK_KEYCHAIN_BLOCK = (
+    '# [patcher self-heal] macOS Docker Desktop credsStore="desktop" routes every\n'
+    "# image pull through docker-credential-desktop, which reads the login keychain.\n"
+    "# This hook runs in the non-interactive ssh session of the push, where the\n"
+    '# keychain is locked ("user interaction is not allowed") and the build dies.\n'
+    "# Point docker at a throwaway config with no credsStore so public base images\n"
+    "# pull anonymously; cliPluginsExtraDirs keeps `docker compose`/buildx resolvable.\n"
+    'DOCKER_CONFIG="${TMPDIR:-/tmp}/patcher-docker-config"\n'
+    'mkdir -p "$DOCKER_CONFIG"\n'
+    'cat > "$DOCKER_CONFIG/config.json" <<JSON\n'
+    '{ "cliPluginsExtraDirs": ["$HOME/.docker/cli-plugins"] }\n'
+    "JSON\n"
+    "export DOCKER_CONFIG\n"
+)
+
+
+def _heal_hook_text(text: str) -> str | None:
+    """Return patched hook text if it needs the keychain fix, else None.
+
+    Idempotent: inserts the DOCKER_CONFIG sanitation block immediately before the
+    `docker compose up` line (so it is exported before any registry pull) and adds
+    `--force-recreate` so a rebuilt image actually replaces the running container.
+    Returns None when the hook already has both (nothing to do) or is unrecognised
+    (no `docker compose up` line — leave it untouched rather than corrupt it).
+    """
+    new = text
+    if _HOOK_KEYCHAIN_MARKER not in new:
+        i = new.find("docker compose up")
+        if i == -1:
+            return None
+        line_start = new.rfind("\n", 0, i) + 1
+        new = new[:line_start] + _HOOK_KEYCHAIN_BLOCK + new[line_start:]
+    if "--build --force-recreate" not in new:
+        new = new.replace("compose up -d --build", "compose up -d --build --force-recreate")
+    return new if new != text else None
+
+
+async def _ensure_remote_hook_keychain(service: str, settings: Settings) -> dict:
+    """Make sure the live VM post-receive hook has the keychain fix before we push.
+
+    Reads the hook over SSH, heals it in memory if needed, and writes it back.
+    A missing hook (repo not seeded) is left to init-vm.sh; a write failure is
+    raised so the operator sees it rather than deploying through a stale hook.
+    """
+    remote_git = f"{settings.vm_git_remote_root.rstrip('/')}/{service}.git"
+    hook = f"{remote_git}/hooks/post-receive"
+    read = await _run(
+        settings.ssh_base_command()
+        + [f"sh -c {shlex.quote(f'cat {shlex.quote(hook)} 2>/dev/null')}"]
+    )
+    text = read.stdout
+    if not text.strip():
+        return {"hook": "absent"}
+    patched = _heal_hook_text(text)
+    if patched is None:
+        return {"hook": "current"}
+    write_cmd = f"cat > {shlex.quote(hook)} && chmod +x {shlex.quote(hook)}"
+    res = await _run(
+        settings.ssh_base_command() + [f"sh -c {shlex.quote(write_cmd)}"],
+        input_bytes=patched.encode(),
+    )
+    if not res.ok:
+        raise PatcherError(
+            f"failed to refresh post-receive hook on VM ({hook}): "
+            f"{(res.stderr or res.stdout).strip()}"
+        )
+    return {"hook": "healed"}
+
+
 async def deploy(service: str, branch: str | None = None) -> dict:
     """`git push origin <branch>`. The VM's post-receive hook does the rebuild."""
     s = get_settings()
@@ -875,6 +1067,9 @@ async def deploy(service: str, branch: str | None = None) -> dict:
     # spelling so we can echo it back in the result.
     service = canonical_service_name(service, s)
     branch = branch or s.patcher_default_branch
+    # Self-heal the live hook before pushing so the macOS keychain does not break
+    # the rebuild on a hook seeded before the credsStore fix landed.
+    hook_state = await _ensure_remote_hook_keychain(service, s)
     # Snapshot the local HEAD now: this is the SHA we expect to find live after
     # the push, and what every verification step below compares against.
     sha = (await _git(service, ["rev-parse", "HEAD"])).stdout.strip()
@@ -910,6 +1105,7 @@ async def deploy(service: str, branch: str | None = None) -> dict:
         "remote": s.remote_url(service),
         "output": output,
         "verified": verified,
+        "hook": hook_state,
     }
 
 
