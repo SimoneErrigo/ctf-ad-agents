@@ -202,7 +202,7 @@ write_hook() {  # $1=bare  $2=worktree  $3=branch  $4=exclude-pathspec
     echo 'JSON'
     echo 'export DOCKER_CONFIG'
     echo ''
-    echo 'if docker compose up -d --build; then'
+    echo 'if docker compose up -d --build --force-recreate; then'
     echo '  echo "post-receive: deploy OK ($WORK @ $(git --git-dir="$BARE_GIT_DIR" rev-parse --short "$BRANCH"))"'
     echo 'else'
     echo '  rc=$?'
@@ -253,6 +253,24 @@ seed_service() {  # $1=worktree  $2=bare  $3=branch  $4=plain excludes
     case "$out" in
       *DEPLOY-FAILED*|*"command not found"*|*"Cannot connect to the Docker daemon"*)
         warn "the post-receive hook reported a deploy failure (see push output above)" ;;
+    esac
+    # A push that delivers no new commit ("Everything up-to-date") does NOT fire
+    # post-receive, so a re-seed of unchanged source would leave the running
+    # container on its old (possibly patched) image and never rebuild. Detect
+    # that the hook did not run (its stdout always carries a "post-receive:"
+    # marker) and invoke it directly so a (re)seed ALWAYS rebuilds. The generated
+    # hook reads no stdin and rebuilds $BRANCH unconditionally, so running it
+    # standalone is safe.
+    case "$out" in
+      *"post-receive:"*) : ;;  # hook already ran as part of the push
+      *)
+        log "  push was up-to-date; forcing rebuild via post-receive hook"
+        if hout=$(sh "$bare/hooks/post-receive" 2>&1); then
+          printf '%s\n' "$hout" | sed 's/^/    /'
+        else
+          printf '%s\n' "$hout" | sed 's/^/    /'
+          warn "forced rebuild via hook failed for $(basename "$wt")"
+        fi ;;
     esac
   else
     printf '%s\n' "$out" | sed 's/^/    /'
