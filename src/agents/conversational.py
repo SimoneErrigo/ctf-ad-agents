@@ -11,7 +11,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from src.llm_config import bedrock_config
+from src.llm_config import bedrock_config, bedrock_rate_limiter
 
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are the Supervisor, the operator-facing front door of an Attack & Defense "
@@ -152,6 +152,7 @@ def build_conversational_llm() -> ChatBedrockConverse:
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
         temperature=0.1,
         config=bedrock_config(),
+        rate_limiter=bedrock_rate_limiter(),
     )
 
 

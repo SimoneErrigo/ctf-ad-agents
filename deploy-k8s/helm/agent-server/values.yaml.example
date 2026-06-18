@@ -50,6 +50,8 @@ apiServer:
         valueFrom: { configMapKeyRef: { name: agent-config, key: CHAT_AGENT_MODEL } }
       - name: SYNTHESIS_MODEL
         valueFrom: { configMapKeyRef: { name: agent-config, key: SYNTHESIS_MODEL } }
+      - name: BEDROCK_MAX_RPS
+        valueFrom: { configMapKeyRef: { name: agent-config, key: BEDROCK_MAX_RPS } }
       # --- MCP base URLs (from the endpoints ConfigMap) ---
       - name: JANUS_MCP_BASE_URL
         valueFrom: { configMapKeyRef: { name: endpoints, key: JANUS_MCP_BASE_URL } }

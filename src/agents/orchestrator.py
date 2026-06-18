@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langgraph.types import Send
 from pydantic import BaseModel, Field
 
-from src.llm_config import bedrock_config
+from src.llm_config import bedrock_config, bedrock_rate_limiter
 from src.state.state import Classification, RouterState
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ def build_orchestrator_llm() -> ChatBedrockConverse:
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
         temperature=0.1,
         config=bedrock_config(),
+        rate_limiter=bedrock_rate_limiter(),
     )
 
 
@@ -46,6 +47,7 @@ def build_synthesis_llm() -> ChatBedrockConverse:
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
         temperature=0.1,
         config=bedrock_config(),
+        rate_limiter=bedrock_rate_limiter(),
     )
 
 

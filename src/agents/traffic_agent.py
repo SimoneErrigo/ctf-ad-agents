@@ -6,7 +6,7 @@ from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langchain_aws.middleware import BedrockPromptCachingMiddleware
 
-from src.llm_config import bedrock_config
+from src.llm_config import bedrock_config, bedrock_rate_limiter
 from src.tools.hitl import traffic_hitl
 from src.tools.mcp_client import MCPToolRegistry
 from src.tools.traffic_agent_tools import get_traffic_tools
@@ -127,6 +127,7 @@ def _build_llm() -> ChatBedrockConverse:
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
         temperature=0.1,
         config=bedrock_config(),
+        rate_limiter=bedrock_rate_limiter(),
     )
 
 
