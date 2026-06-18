@@ -103,8 +103,12 @@ ALL-SERVICES FAN-OUT: if an exploit or patch request targets every/the services
 collectively and names no specific service ("analyze the services", "find the vulns",
 "patch all of them"), emit ONE classification with fan_out_all=true and a
 service-agnostic `query` (do NOT name a service); the router replicates it per live
-service. A standalone traffic report or inventory question is NOT fanned out (one task
-already spans every service) -> leave fan_out_all unset.
+service. A traffic ATTACK-HUNT across all services with no service named ("are any/all
+services under attack", "find the attacks across all services") ALSO fans out: emit ONE
+traffic classification with fan_out_all=true and a service-agnostic `query` so each
+service gets its own deep per-service traffic pass instead of one shallow sweep. A plain
+traffic REPORT or an inventory/status question is NOT fanned out (one task already spans
+every service) -> leave fan_out_all unset.
 """
 
 

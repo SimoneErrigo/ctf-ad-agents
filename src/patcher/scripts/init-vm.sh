@@ -276,6 +276,23 @@ seed_service() {  # $1=worktree  $2=bare  $3=branch  $4=plain excludes
     printf '%s\n' "$out" | sed 's/^/    /'
     die "git push failed for $(basename "$wt")"
   fi
+
+  # On an explicit --force reset, the post-receive build above is cache-allowed, so a
+  # service that bakes its code into the image (no source bind-mount, e.g. `build: .`
+  # with no `volumes:`) can come back up from a stale patched layer. Force a one-time
+  # clean rebuild here so a reset is authoritative. The runtime hook stays
+  # cache-enabled, so the patch-agent's normal deploys remain fast.
+  if [ "$FORCE" -eq 1 ] && command -v docker >/dev/null 2>&1; then
+    log "  --force reset: clean (no-cache) rebuild of $(basename "$wt")"
+    if cout=$( cd "$wt" && docker compose down --rmi local --remove-orphans 2>&1 \
+               && docker compose build --no-cache 2>&1 \
+               && docker compose up -d --force-recreate 2>&1 ); then
+      printf '%s\n' "$cout" | tail -n 3 | sed 's/^/    /'
+    else
+      printf '%s\n' "$cout" | tail -n 8 | sed 's/^/    /'
+      warn "clean rebuild failed for $(basename "$wt")"
+    fi
+  fi
 }
 
 IFS='
@@ -302,10 +319,23 @@ for spec in $SERVICES; do
     if [ -d "$wt" ] && [ "$FORCE" -eq 0 ]; then
       log "  worktree exists: $wt (keeping; use --force to overwrite from source)"
     else
-      log "  copying $src -> $wt"
+      log "  copying $src -> $wt (clean mirror)"
       mkdir -p "$wt"
-      # tar pipe: portable across bsdtar (macOS) / GNU tar (Linux), skips source .git/.
-      ( cd "$src" && tar cf - --exclude='./.git' . ) | ( cd "$wt" && tar xf - )
+      # On --force this is a RESET: the worktree may still hold a previous deploy's
+      # patched files (and files the patch ADDED, which the old tar-overlay never
+      # removed), so the rebuild below would re-bake / re-serve them. Mirror the
+      # pristine source, DELETING stale files, but never touch .git (keeps history, so
+      # the seed below just adds a pristine-content commit on top -> fast-forward push,
+      # no force needed) or the excluded runtime dirs (db/data etc.).
+      _protect="--exclude=.git"
+      for e in $EXCLUDE_PLAIN; do [ -n "$e" ] && _protect="$_protect --exclude=$e"; done
+      if command -v rsync >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        rsync -a --delete $_protect "$src"/ "$wt"/
+      else
+        warn "rsync not found; falling back to tar overlay (will NOT remove patch-added files)"
+        ( cd "$src" && tar cf - --exclude='./.git' . ) | ( cd "$wt" && tar xf - )
+      fi
     fi
   else
     wt="$src"
