@@ -6,7 +6,7 @@ import os
 
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.types import Send
+from langgraph.types import Command, Send
 from pydantic import BaseModel, Field
 
 from src.llm_config import bedrock_config, bedrock_rate_limiter
@@ -114,21 +114,35 @@ every service) -> leave fan_out_all unset.
 """
 
 
-def route_to_agents(state: RouterState) -> list[Send] | str:
-    """Fan out to sub-agents based on the classifications produced by classify.
+def dispatch_next(state: RouterState) -> Command:
+    """Dispatch the specialists ONE AT A TIME, draining the `pending` queue that
+    `classify` seeds, then fan in to `final`.
 
-    Each sub-agent is a subgraph node on the shared `messages` channel, so we
-    hand it ONLY its scoped sub-question as the input message; its own reasoning
-    and tool calls merge back into the shared transcript (visible in the UI).
-    Zero classifications would otherwise end the run with no operator-facing
-    reply (the dispatch ToolMessage is the last thing on the thread), so route
-    straight to `final`, which answers the no-reports case."""
-    if not state["classifications"]:
-        return "final"
-    return [
-        Send(c["source"], {"messages": [HumanMessage(content=c["query"])]})
-        for c in state["classifications"]
-    ]
+    Each sub-agent is a subgraph node on the shared `messages` channel, so we hand
+    it ONLY its scoped sub-question; its reasoning/tool calls merge into the shared
+    transcript (visible in the UI). After each specialist the graph loops back here
+    (see graph.py) and we Send the next one, or route to `final` once the queue is
+    empty -- also the zero-classifications case, which would otherwise end the run
+    with no operator-facing reply (the dispatch ToolMessage is the last thing on the
+    thread).
+
+    Why sequential, not a parallel list of Sends: running the specialists
+    concurrently opens several HITL gates in the SAME superstep, and concurrent
+    sub-agent interrupts do not resume cleanly -- LangGraph keeps an already-approved
+    interrupt in the reported state until the WHOLE parallel step clears (only
+    `next` is authoritative) and the interrupt ids shift as sibling agents keep
+    streaming, so the UI cannot land every approval: one branch stays unapproved, its
+    gated tool never fires, and `final` (which waits for all branches) never runs.
+    One gate at a time is the well-behaved single-interrupt path. The Bedrock rate
+    limiter already serializes the model calls, so this costs ~no wall-time."""
+    queue = state.get("pending") or []
+    if not queue:
+        return Command(goto="final")
+    nxt, *rest = queue
+    return Command(
+        goto=Send(nxt["source"], {"messages": [HumanMessage(content=nxt["query"])]}),
+        update={"pending": rest},
+    )
 
 
 async def _service_names(registry) -> list[str]:
@@ -178,7 +192,10 @@ def make_classify_node(structured_llm, registry=None):
                 )
                 continue
             out.append({"source": c["source"], "query": c["query"]})
-        return {"classifications": out}
+        # `pending` is the queue `dispatch` drains one specialist at a time; reset it
+        # every turn (classify runs once per dispatched request) so a previous turn's
+        # drained queue never suppresses this turn's specialists.
+        return {"classifications": out, "pending": list(out)}
 
     return classify_query
 

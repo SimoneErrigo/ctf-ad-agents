@@ -16,7 +16,7 @@ data:
   # Shared cap on aggregate Bedrock requests/second (every agent shares one
   # limiter) -> smooths the all-services fan-out burst that throttles Bedrock.
   # These pods run Opus (lower Bedrock quota than local Sonnet): lower if needed.
-  BEDROCK_MAX_RPS: "4"
+  BEDROCK_MAX_RPS: "0.07"
   # TRAFFIC_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
   # PATCH_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
   # EXPLOIT_AGENT_MODEL: us.anthropic.claude-sonnet-4-6

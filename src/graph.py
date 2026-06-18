@@ -7,9 +7,9 @@ from src.agents.orchestrator import (
     ClassificationResult,
     build_orchestrator_llm,
     build_synthesis_llm,
+    dispatch_next,
     make_classify_node,
     make_final_node,
-    route_to_agents,
 )
 from src.agents.exploit_agent import build_exploit_agent
 from src.agents.patch_agent import build_patch_agent
@@ -68,13 +68,17 @@ async def make_graph():
     # Default: the supervisor replied to the operator and we are done. The
     # dispatch tool overrides this with Command(goto="classify") when handing off.
     workflow.add_edge("supervisor", END)
-    workflow.add_conditional_edges(
-        "classify", route_to_agents, ["traffic", "patch", "exploit", "final"]
+    workflow.add_node(
+        "dispatch", dispatch_next, destinations=("traffic", "patch", "exploit", "final")
     )
-    # Specialists fan in to `final`, which synthesizes one operator-facing reply.
-    workflow.add_edge("traffic", "final")
-    workflow.add_edge("patch", "final")
-    workflow.add_edge("exploit", "final")
+    workflow.add_edge("classify", "dispatch")
+    # Specialists run ONE AT A TIME: each loops back to `dispatch`, which Sends the
+    # next pending specialist or, when the queue is empty, fans in to `final` (the
+    # single operator-facing reply). One HITL gate open at a time -- concurrent
+    # sub-agent interrupts do not resume cleanly (see dispatch_next for the rationale).
+    workflow.add_edge("traffic", "dispatch")
+    workflow.add_edge("patch", "dispatch")
+    workflow.add_edge("exploit", "dispatch")
     workflow.add_edge("final", END)
 
     return workflow.compile()

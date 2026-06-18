@@ -12,7 +12,7 @@ from langgraph.types import Send
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.agents.conversational import _strip_tool_noise
-from src.agents.orchestrator import make_final_node, route_to_agents
+from src.agents.orchestrator import dispatch_next, make_final_node
 from src.tools.hitl import _exploit_detail
 
 
@@ -33,21 +33,24 @@ def _dispatch_marker() -> ToolMessage:
     )
 
 
-# route_to_agents
+# dispatch_next (sequential specialist dispatch)
 
-def test_route_fans_out_one_send_per_classification():
-    state = {"classifications": [
+def test_dispatch_sends_first_pending_specialist():
+    state = {"pending": [
         {"source": "traffic", "query": "q1"},
         {"source": "exploit", "query": "q2"},
     ]}
-    sends = route_to_agents(state)
-    assert [s.node for s in sends] == ["traffic", "exploit"]
-    assert all(isinstance(s, Send) for s in sends)
-    assert sends[0].arg["messages"][0].content == "q1"
+    cmd = dispatch_next(state)
+    assert isinstance(cmd.goto, Send)
+    assert cmd.goto.node == "traffic"
+    assert cmd.goto.arg["messages"][0].content == "q1"
+    # the dispatched specialist is dropped from the queue; the rest carry over so the
+    # next loop back into `dispatch` runs them one at a time.
+    assert cmd.update["pending"] == [{"source": "exploit", "query": "q2"}]
 
 
-def test_route_empty_classifications_goes_to_final():
-    assert route_to_agents({"classifications": []}) == "final"
+def test_dispatch_empty_queue_goes_to_final():
+    assert dispatch_next({"pending": []}).goto == "final"
 
 
 # final node

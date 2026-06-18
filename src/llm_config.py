@@ -30,15 +30,15 @@ def bedrock_rate_limiter() -> InMemoryRateLimiter:
     """A single process-wide, client-side request limiter shared by EVERY
     Bedrock LLM (each agent passes this one cached instance).
 
-    An all-services request ("find the attacks across all services") fans out
-    into one sub-agent per live service, all running concurrently in the same
-    LangGraph superstep (see ``orchestrator.route_to_agents``). Without a shared
-    cap their Converse calls fire at once and burst past the model's per-second
-    request quota, so Bedrock returns ``ThrottlingException`` and the run dies.
-    One shared token bucket paces the aggregate request rate so the burst is
-    spread out instead of hitting Bedrock simultaneously; the adaptive retries
-    in ``bedrock_config`` then only have to absorb the rare leftover. Tune with
-    ``BEDROCK_MAX_RPS`` (requests/second) to match the account's Bedrock quota.
+    Bedrock enforces a tight per-minute quota (e.g. ~5 req/min for Opus on a
+    fresh account). A single agent's ReAct loop alone fires several Converse calls
+    in a few seconds, and a multi-task request queues several agents back-to-back
+    (``orchestrator.dispatch_next`` runs them sequentially), so without a shared cap
+    the calls burst past the quota and Bedrock returns ``ThrottlingException``,
+    killing the run. One shared token bucket paces the aggregate request rate so the
+    burst is spread out; the adaptive retries in ``bedrock_config`` then only have to
+    absorb the rare leftover. Tune with ``BEDROCK_MAX_RPS`` (requests/second) to
+    match the account's Bedrock quota.
     """
     rps = float(os.getenv("BEDROCK_MAX_RPS", "4"))
     return InMemoryRateLimiter(
