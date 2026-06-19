@@ -16,8 +16,7 @@ class RouterState(MessagesState):
     """Shared state for the whole graph. `messages` (from MessagesState) is the
     single conversation channel: the supervisor, the sub-agents and their tool
     calls all append to it, so the UI renders every agent's reasoning. `query`
-    holds the supervisor's dispatched task; `classifications` the routing fan-out;
-    `pending` is the queue `dispatch` drains to run the specialists one at a time."""
+    holds the supervisor's dispatched task; `classifications` the routing fan-out
+    that `route_to_agents` turns into one parallel Send per specialist."""
     query: str
     classifications: list[Classification]
-    pending: NotRequired[list[Classification]]
