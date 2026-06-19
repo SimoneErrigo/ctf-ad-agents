@@ -1146,3 +1146,150 @@ async def rollback(service: str, commit_sha: str, branch: str | None = None) -> 
         "remote": deploy_res["remote"],
         "verified": deploy_res.get("verified"),
     }
+
+
+async def _first_commit_sha(service: str, branch: str) -> str | None:
+    """Earliest (root/seed) commit SHA on `branch`, or None if the repo is empty.
+
+    The seed commit is the initial import done by scripts/init-vm.sh: the state
+    of the service BEFORE any patch landed. We take the root commit (no parents);
+    if history has several roots we pick the earliest one rev-list returns.
+    """
+    res = await _git(service, ["rev-list", "--max-parents=0", branch], check=False)
+    if not res.ok:
+        return None
+    shas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    return shas[-1] if shas else None
+
+
+async def list_commits(service: str, branch: str | None = None, n: int = 50) -> dict:
+    """Structured commit history for one service, newest first.
+
+    Used to disambiguate vague rollback requests: each entry carries the full and
+    short SHA, ISO date, author, subject, and an `is_seed` flag marking the first
+    (unpatched) commit. History is scoped to the service's subpath when it shares
+    a repo, so a sub-service only shows its own commits.
+    """
+    s = get_settings()
+    requested_service = service
+    service = canonical_service_name(service, s)
+    branch = branch or s.patcher_default_branch
+    sub = service_subpath(service, s)
+    args = [
+        "log",
+        branch,
+        f"-n{n}",
+        "--pretty=format:%H%x09%h%x09%ad%x09%an%x09%s",
+        "--date=iso-strict",
+    ]
+    if sub:
+        args += ["--", sub]
+    res = await _git(service, args, check=False)
+    if not res.ok:
+        raise PatcherError(
+            f"git log failed: {(res.stderr or res.stdout).strip()}"
+        )
+    seed = await _first_commit_sha(service, branch)
+    commits: list[dict] = []
+    for line in res.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        full, short, date, author, subject = parts
+        commits.append(
+            {
+                "sha": full,
+                "short_sha": short,
+                "date": date,
+                "author": author,
+                "subject": subject,
+                "is_seed": full == seed,
+            }
+        )
+    return {
+        "requested_service": requested_service,
+        "service": service,
+        "branch": branch,
+        "seed_commit": seed,
+        "commits": commits,
+    }
+
+
+async def rollback_to(
+    service: str, target_commit: str | None = None, branch: str | None = None
+) -> dict:
+    """Restore a service to the state of `target_commit` and deploy it.
+
+    `target_commit=None` means the first (seed) commit -> drop ALL patches. Like
+    `rollback`, this is "forward, not backward": we don't rewrite history, we
+    create a new commit whose tree matches `target_commit` and deploy it the
+    normal way. Scoped to the service's subpath, so rolling back one sub-service
+    never touches its siblings sharing the repo.
+    """
+    s = get_settings()
+    requested_service = service
+    service = canonical_service_name(service, s)
+    branch = branch or s.patcher_default_branch
+    if target_commit is not None and not re.match(r"^[0-9a-fA-F]{4,64}$", target_commit):
+        raise PatcherError(f"invalid commit sha: {target_commit!r}")
+    # Make sure we are on the target branch; create it if it does not exist yet.
+    sw = await _git(service, ["switch", branch], check=False)
+    if not sw.ok:
+        await _git(service, ["switch", "-c", branch])
+    # Resolve / validate the target.
+    to_seed = target_commit is None
+    if to_seed:
+        target_commit = await _first_commit_sha(service, branch)
+        if not target_commit:
+            raise PatcherError("no commits found for service (repo unseeded?)")
+    else:
+        verify = await _git(
+            service, ["rev-parse", "--verify", f"{target_commit}^{{commit}}"], check=False
+        )
+        if not verify.ok:
+            raise PatcherError(f"commit not found: {target_commit}")
+    short_target = target_commit[:12]
+    sub = service_subpath(service, s)
+    pathspec = [sub] if sub else ["."]
+    # Restore tracked files in the subpath to their state at the target commit.
+    co = await _git(service, ["checkout", target_commit, "--", *pathspec], check=False)
+    if not co.ok:
+        raise PatcherError(f"git checkout failed: {(co.stderr or co.stdout).strip()}")
+    # `checkout <tree> -- path` only rewrites files present in the target; files
+    # ADDED in the subpath after the target survive, so remove them explicitly to
+    # make the tree an exact match.
+    added = await _git(
+        service,
+        ["diff", "--name-only", "--diff-filter=A", target_commit, "HEAD", "--", *pathspec],
+        check=False,
+    )
+    to_remove = [p for p in added.stdout.splitlines() if p.strip()]
+    if to_remove:
+        await _git(service, ["rm", "-f", "--", *to_remove], check=False)
+    # Nothing staged means the service is already at the target state.
+    no_changes = await _git(service, ["diff", "--cached", "--quiet"], check=False)
+    if no_changes.ok:
+        return {
+            "rolled_back_to": target_commit,
+            "to_seed": to_seed,
+            "requested_service": requested_service,
+            "service": service,
+            "branch": branch,
+            "changed": False,
+            "reason": "already at target commit; nothing to roll back",
+        }
+    label = "seed commit" if to_seed else f"commit {short_target}"
+    await _git(service, ["commit", "-m", f"rollback: restore {service} to {label}"])
+    # Reuse deploy so the rollback goes through the same push + verification path.
+    deploy_res = await deploy(service, branch)
+    return {
+        "rolled_back_to": target_commit,
+        "to_seed": to_seed,
+        "requested_service": requested_service,
+        "service": service,
+        "new_commit_sha": deploy_res["commit_sha"],
+        "branch": branch,
+        "changed": True,
+        "remote": deploy_res["remote"],
+        "verified": deploy_res.get("verified"),
+    }

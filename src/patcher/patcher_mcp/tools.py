@@ -319,3 +319,53 @@ def register_tools(mcp: FastMCP) -> None:
             return await git_functions.rollback(service, commit_sha, branch)
         except PatcherError as e:
             return _as_error(e)
+
+    @mcp.tool(tags={"patch"}, annotations={"readOnlyHint": True, "openWorldHint": True})
+    async def list_commits(
+        service: Annotated[str, Field(min_length=1, description="Service name.")],
+        branch: Annotated[
+            str | None,
+            Field(description="Branch to list. Defaults to PATCHER_DEFAULT_BRANCH."),
+        ] = None,
+        n: Annotated[int, Field(ge=1, le=200, description="Max commits, newest first.")] = 50,
+    ) -> dict[str, Any]:
+        """Structured commit history for a service (newest first).
+
+        Each entry has sha/short_sha/date/author/subject and an `is_seed` flag on
+        the first unpatched commit. Use this to disambiguate a vague rollback
+        request before choosing a target.
+        """
+        try:
+            return await git_functions.list_commits(service, branch, n)
+        except PatcherError as e:
+            return _as_error(e)
+
+    @mcp.tool(
+        tags={"patch"},
+        annotations={"destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
+    )
+    async def rollback_to(
+        service: Annotated[str, Field(min_length=1, description="Service name.")],
+        target_commit: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Commit to restore the service to (short or full SHA). "
+                    "Omit to restore the first (seed) commit, dropping all patches."
+                )
+            ),
+        ] = None,
+        branch: Annotated[
+            str | None,
+            Field(description="Branch to push on. Defaults to PATCHER_DEFAULT_BRANCH."),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Restore a service to `target_commit` (or the seed commit) and push it.
+
+        Forward-only (creates a new commit matching the target tree, scoped to the
+        service subpath). HITL-gated upstream.
+        """
+        try:
+            return await git_functions.rollback_to(service, target_commit, branch)
+        except PatcherError as e:
+            return _as_error(e)

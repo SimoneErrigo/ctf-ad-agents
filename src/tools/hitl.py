@@ -69,6 +69,12 @@ def _rollback(a: dict[str, Any]) -> str:
     return f"Rollback service '{a.get('service')}' to commit {a.get('commit_sha')!r}"
 
 
+def _rollback_to(a: dict[str, Any]) -> str:
+    target = a.get("target_commit")
+    where = f"commit {target!r}" if target else "the first (seed) commit, dropping all patches"
+    return f"Rollback service '{a.get('service')}' to {where}"
+
+
 def _start_exploit(a: dict[str, Any]) -> str:
     return f"Launch exploit '{a.get('name')}' against ALL teams (real attack)"
 
@@ -130,6 +136,7 @@ def patch_hitl() -> HumanInTheLoopMiddleware:
         interrupt_on={
             "deploy": _control(_deploy, _deploy_detail),
             "rollback": _control(_rollback),
+            "rollback_to": _control(_rollback_to),
         }
     )
 

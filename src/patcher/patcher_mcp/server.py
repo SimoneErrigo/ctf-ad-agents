@@ -20,7 +20,9 @@ INSTRUCTIONS = (
     "read_file to understand the vulnerability -> replace_text or apply_patch "
     "for a compact minimal patch -> get_diff to review -> deploy (HUMAN "
     "APPROVAL REQUIRED). Use write_files only for whole-file rewrites. Use "
-    "rollback(commit_sha) to undo a bad deploy; discard_changes drops "
+    "rollback(commit_sha) to undo a bad deploy; rollback_to(commit/seed) to "
+    "restore a service to a chosen commit (omit the commit for the unpatched seed); "
+    "list_commits to disambiguate a vague rollback request; discard_changes drops "
     "uncommitted work."
 )
 
