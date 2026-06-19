@@ -1059,8 +1059,51 @@ async def _ensure_remote_hook_keychain(service: str, settings: Settings) -> dict
     return {"hook": "healed"}
 
 
-async def deploy(service: str, branch: str | None = None) -> dict:
-    """`git push origin <branch>`. The VM's post-receive hook does the rebuild."""
+async def _remote_no_cache_rebuild(service: str, worktree: str, settings: Settings) -> dict:
+    """Force a cache-less rebuild of the deployed worktree, over SSH.
+
+    The post-receive hook always rebuilds with `docker compose up -d --build`,
+    which is cache-allowed: on a rollback the reverted source can collide with a
+    previously built (patched) layer, so the cache is reused and the running
+    container keeps the old patched code. For rollbacks we follow the push with an
+    explicit `docker compose build --no-cache` + `up -d --force-recreate` so the
+    image is rebuilt from scratch and the rolled-back code actually ships.
+
+    Mirrors the hook's PATH and DOCKER_CONFIG workarounds: the non-interactive ssh
+    session has a minimal PATH and, on macOS Docker Desktop, a locked keychain that
+    breaks credsStore="desktop" pulls. The script is fully quoted with shlex.quote.
+    """
+    script = "\n".join([
+        "set -eu",
+        f"WORK={shlex.quote(worktree)}",
+        'export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin:$PATH"',
+        'command -v docker >/dev/null 2>&1 || { echo "no-cache rebuild: docker not found (PATH=$PATH)" >&2; exit 1; }',
+        'cd "$WORK" || { echo "no-cache rebuild: cannot cd $WORK" >&2; exit 1; }',
+        'DOCKER_CONFIG="${TMPDIR:-/tmp}/patcher-docker-config"',
+        'mkdir -p "$DOCKER_CONFIG"',
+        'cat > "$DOCKER_CONFIG/config.json" <<JSON',
+        '{ "cliPluginsExtraDirs": ["$HOME/.docker/cli-plugins"] }',
+        "JSON",
+        "export DOCKER_CONFIG",
+        "docker compose build --no-cache",
+        "docker compose up -d --force-recreate",
+    ])
+    res = await _run(settings.ssh_base_command() + [f"sh -c {shlex.quote(script)}"])
+    if not res.ok:
+        raise PatcherError(
+            f"no-cache rebuild failed for {service} worktree {worktree}: "
+            f"{(res.stderr or res.stdout).strip()}"
+        )
+    return {"worktree": worktree, "no_cache": True}
+
+
+async def deploy(service: str, branch: str | None = None, *, no_cache: bool = False) -> dict:
+    """`git push origin <branch>`. The VM's post-receive hook does the rebuild.
+
+    `no_cache=True` follows the push with an explicit cache-less rebuild of the
+    deployed worktree (used by rollbacks, where the hook's cached build would
+    otherwise reuse the patched image layers). Requires a configured worktree.
+    """
     s = get_settings()
     requested_service = service
     # Normalise aliases to the real service name, but keep the caller's original
@@ -1096,6 +1139,17 @@ async def deploy(service: str, branch: str | None = None) -> dict:
     if worktree:
         verified["worktree"] = await _verify_remote_worktree(service, branch, sha, worktree, s)
 
+    # For rollbacks the hook's cache-allowed build is not enough; rebuild the
+    # worktree from scratch so the reverted code is not masked by a stale layer.
+    rebuild = None
+    if no_cache:
+        if not worktree:
+            raise PatcherError(
+                f"no_cache rebuild requested but no deploy worktree is configured "
+                f"for {service!r} (set patcher_deploy_worktrees)"
+            )
+        rebuild = await _remote_no_cache_rebuild(service, worktree, s)
+
     return {
         "deployed": True,
         "requested_service": requested_service,
@@ -1106,6 +1160,7 @@ async def deploy(service: str, branch: str | None = None) -> dict:
         "output": output,
         "verified": verified,
         "hook": hook_state,
+        "rebuild": rebuild,
     }
 
 
@@ -1136,7 +1191,8 @@ async def rollback(service: str, commit_sha: str, branch: str | None = None) -> 
             f"git revert failed: {(revert.stderr or revert.stdout).strip()}"
         )
     # Reuse deploy so the revert goes through the same push + verification path.
-    deploy_res = await deploy(service, branch)
+    # no_cache: the rebuilt image must not reuse the patched layers we just reverted.
+    deploy_res = await deploy(service, branch, no_cache=True)
     return {
         "rolled_back": commit_sha,
         "requested_service": requested_service,
@@ -1145,6 +1201,7 @@ async def rollback(service: str, commit_sha: str, branch: str | None = None) -> 
         "branch": branch,
         "remote": deploy_res["remote"],
         "verified": deploy_res.get("verified"),
+        "rebuild": deploy_res.get("rebuild"),
     }
 
 
@@ -1281,7 +1338,8 @@ async def rollback_to(
     label = "seed commit" if to_seed else f"commit {short_target}"
     await _git(service, ["commit", "-m", f"rollback: restore {service} to {label}"])
     # Reuse deploy so the rollback goes through the same push + verification path.
-    deploy_res = await deploy(service, branch)
+    # no_cache: the rebuilt image must not reuse the patched layers we just reverted.
+    deploy_res = await deploy(service, branch, no_cache=True)
     return {
         "rolled_back_to": target_commit,
         "to_seed": to_seed,
@@ -1292,4 +1350,5 @@ async def rollback_to(
         "changed": True,
         "remote": deploy_res["remote"],
         "verified": deploy_res.get("verified"),
+        "rebuild": deploy_res.get("rebuild"),
     }
