@@ -7,13 +7,20 @@ metadata:
   name: agent-config
 data:
   REGION_NAME: us-east-1
+  # Front-door supervisor + final synthesis stay on cheap Haiku (simple
+  # dispatch/summarize); the router (classify) and the three workers run Sonnet 4.6.
+  CHAT_AGENT_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  SYNTHESIS_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+
+  ROUTER_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
   TRAFFIC_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
   PATCH_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
   EXPLOIT_AGENT_MODEL: us.anthropic.claude-sonnet-4-6
-  ROUTER_AGENT_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
-  CHAT_AGENT_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
-  SYNTHESIS_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
   BEDROCK_MAX_RPS: "0.15"
+
+  # Opus preset (swap back by uncommenting + commenting the Sonnet ids above; Opus
+  # has a lower Bedrock quota -> drop BEDROCK_MAX_RPS to "0.07"):
+  #ROUTER_AGENT_MODEL: us.anthropic.claude-opus-4-6-v1
   #TRAFFIC_AGENT_MODEL: us.anthropic.claude-opus-4-6-v1
   #PATCH_AGENT_MODEL: us.anthropic.claude-opus-4-6-v1
   #EXPLOIT_AGENT_MODEL: us.anthropic.claude-opus-4-6-v1

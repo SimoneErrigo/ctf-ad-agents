@@ -91,7 +91,8 @@ traffic -> recent Janus traffic reports, Janus alert/drop rules, and Janus servi
 inventory/status. Route here ONLY for a standalone traffic report, a rule/block/alert,
 or an inventory question.
 - report/rule: "Inspect only recent traffic for service X; report endpoint/parameter/
-  payload evidence, or create the requested Janus rule via HITL."
+  payload evidence, or create the requested Janus rule via HITL." Keep it to ONE rule
+  per attack pattern per service, the fast path (find payload -> verify once -> create).
 - inventory: "List the services and report their status." Route ALL inventory/status
   requests to traffic and NOTHING else: list/how many/names/ports/which are up/proxied,
   AND "on the VM" / "not behind Janus" / "all running services". Traffic now reports
@@ -100,6 +101,12 @@ or an inventory question.
   patch. No packet reads. Never route inventory to patch (it knows only the source it
   has, not the live inventory), and add no packet-analysis scope the operator did not
   ask for.
+
+MULTIPLE NAMED SERVICES: when the operator names SEVERAL specific services for the
+SAME action (patch A and B; exploit X and Y; "drop rules for A, B and C"), emit ONE
+classification PER named service for that specialist, each scoped to its own service --
+never one combined task spanning several, and never fan_out_all (that is ONLY for an
+unnamed collective scope). One service named -> exactly one classification.
 
 ALL-SERVICES FAN-OUT: if an exploit or patch request targets every/the services
 collectively and names no specific service ("analyze the services", "find the vulns",
